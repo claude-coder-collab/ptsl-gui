@@ -5,7 +5,9 @@ Works around issues with the SDK's own build script:
 - the Conan cache is kept outside the project so paths with spaces don't break OpenSSL;
 - the macOS version passed to Conan is clamped to one Conan knows about;
 - Ninja Multi-Config is used instead of Xcode (Command Line Tools are enough);
-- Conan's protoc/grpc_cpp_plugin are put first on PATH so a newer system protoc isn't picked up.
+- Conan's protoc/grpc_cpp_plugin are put first on PATH so a newer system protoc isn't picked up;
+- dependencies are built for macOS 13.3, with configure checks overridden for functions that are only
+  declared in the newer macOS SDK (they would otherwise be linked and fail to load on older macOS).
 """
 
 from __future__ import annotations
@@ -23,6 +25,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_VENV = Path.home() / ".ptsl-venv"
 DEFAULT_CONAN_HOME = Path.home() / ".ptslconan"
 ARCH = "arm64"
+MINIMUM_MACOS = "13.3"
+CONAN_CONF_LINES = ('c-ares/*:tools.cmake.cmaketoolchain:extra_variables={"HAVE_PIPE2": "0"}',)
+PACKAGE_FOLDER_RE = re.compile(r'set\((\w+)_PACKAGE_FOLDER_RELEASE "([^"]+)"\)')
 SDK_DIR_PATTERN = re.compile(r"^PTSL_SDK_CPP\.(\d+)\.(\d+)\.(\d+)\.(\d+)$")
 
 
@@ -45,17 +50,22 @@ def use_ninja_generator(presets_file: Path) -> None:
     presets_file.write_text(json.dumps(presets, indent=4))
 
 
-def find_conan_tool(conan_home: Path, name: str) -> Path:
-    matches = [path for path in (conan_home / "p" / "b").glob(f"*/p/bin/{name}") if path.is_file()]
-    if not matches:
-        raise FileNotFoundError(f"{name} not found in Conan cache {conan_home}")
-    return max(matches, key=lambda path: path.stat().st_mtime)
+def package_folders(dependencies_dir: Path) -> dict[str, Path]:
+    """Conan package folders of a source dir's dependencies, read from the CMakeDeps data files."""
+    folders: dict[str, Path] = {}
+    for data_file in sorted(dependencies_dir.glob("*-release-*-data.cmake")):
+        for name, folder in PACKAGE_FOLDER_RE.findall(data_file.read_text()):
+            folders[name] = Path(folder)
+    return folders
 
 
-def macos_sdk_version() -> str:
-    return subprocess.run(
-        ["xcrun", "--sdk", "macosx", "--show-sdk-version"], check=True, capture_output=True, text=True
-    ).stdout.strip()
+def ensure_conan_conf(conan_home: Path, lines: tuple[str, ...] = CONAN_CONF_LINES) -> None:
+    conf = conan_home / "global.conf"
+    existing = conf.read_text().splitlines() if conf.exists() else []
+    missing = [line for line in lines if line not in existing]
+    if missing:
+        conan_home.mkdir(parents=True, exist_ok=True)
+        conf.write_text("\n".join([*existing, *missing]) + "\n")
 
 
 def ensure_venv(venv: Path, requirements: Path) -> Path:
@@ -74,6 +84,8 @@ def build_target(
     env["PTSL_OS_VERSION"] = os_version
     env["PATH"] = f"{python.parent}{os.pathsep}{env['PATH']}"
 
+    presets_file = source_dir / "CMakeUserPresets.json"
+    presets_file.unlink(missing_ok=True)
     subprocess.run(
         [
             str(python),
@@ -92,7 +104,6 @@ def build_target(
         check=False,
     )
 
-    presets_file = source_dir / "CMakeUserPresets.json"
     if not presets_file.exists():
         raise RuntimeError(f"Conan step failed for {source_dir}; no CMakeUserPresets.json was generated")
     use_ninja_generator(presets_file)
@@ -105,8 +116,9 @@ def build_target(
         elif target.exists():
             target.unlink()
 
-    tool_dirs = {find_conan_tool(conan_home, name).parent for name in ("protoc", "grpc_cpp_plugin")}
-    env["PATH"] = os.pathsep.join([*map(str, tool_dirs), env["PATH"]])
+    folders = package_folders(build_dir / "Dependencies")
+    tool_dirs = [str(folders[name] / "bin") for name in ("protobuf", "grpc") if name in folders]
+    env["PATH"] = os.pathsep.join([*tool_dirs, env["PATH"]])
     env["PTSLC_CPP_FIND_BUILD_TYPE"] = config
     preset = f"ptsl-Darwin-{ARCH}-{config}"
     subprocess.run(["cmake", "--workflow", "--preset", preset], cwd=source_dir, env=env, check=True)
@@ -116,7 +128,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--sdk", type=Path, help="SDK directory (default: newest PTSL_SDK_CPP.* in project root)")
     parser.add_argument("--config", default="Release", choices=["Debug", "Release"])
-    parser.add_argument("--os-version", help="macOS version for Conan (default: installed macOS SDK version)")
+    parser.add_argument("--os-version", default=MINIMUM_MACOS, help="Minimum macOS (default: %(default)s)")
     parser.add_argument("--venv", type=Path, default=DEFAULT_VENV)
     parser.add_argument("--conan-home", type=Path, default=DEFAULT_CONAN_HOME)
     parser.add_argument("--with-ptslcmd", action="store_true", help="Also build the ptslcmd example")
@@ -129,7 +141,8 @@ def main(argv: list[str] | None = None) -> int:
     if " " in str(args.conan_home):
         raise ValueError("Conan home must not contain spaces")
     python = ensure_venv(args.venv, sdk / "Config" / "requirements.txt")
-    os_version = args.os_version or macos_sdk_version()
+    ensure_conan_conf(args.conan_home)
+    os_version = args.os_version
 
     targets = [sdk]
     if args.with_ptslcmd:
