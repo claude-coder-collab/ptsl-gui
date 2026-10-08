@@ -1,0 +1,130 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 28,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "base",
+            "hidden": true,
+            "generator": "Ninja Multi-Config",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo"
+            }
+        },
+        {
+            "name": "dev",
+            "displayName": "Development",
+            "inherits": "base"
+        },
+        {
+            "name": "asan",
+            "displayName": "AddressSanitizer + UndefinedBehaviorSanitizer",
+            "inherits": "base",
+            "cacheVariables": {
+                "PTSLGUI_SANITIZE": "address,undefined"
+            }
+        },
+        {
+            "name": "tsan",
+            "displayName": "ThreadSanitizer",
+            "inherits": "base",
+            "cacheVariables": {
+                "PTSLGUI_SANITIZE": "thread"
+            }
+        },
+        {
+            "name": "tidy",
+            "displayName": "clang-tidy",
+            "inherits": "base",
+            "cacheVariables": {
+                "PTSLGUI_CLANG_TIDY": "ON"
+            }
+        },
+        {
+            "name": "ci",
+            "displayName": "CI (no SDK, warnings as errors)",
+            "inherits": "base",
+            "cacheVariables": {
+                "PTSLGUI_WARNINGS_AS_ERRORS": "ON",
+                "PTSL_SDK_DIR": ""
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "dev",
+            "configurePreset": "dev",
+            "configuration": "Debug"
+        },
+        {
+            "name": "dev-release",
+            "configurePreset": "dev",
+            "configuration": "Release"
+        },
+        {
+            "name": "asan",
+            "configurePreset": "asan",
+            "configuration": "Debug"
+        },
+        {
+            "name": "tsan",
+            "configurePreset": "tsan",
+            "configuration": "Debug"
+        },
+        {
+            "name": "tidy",
+            "configurePreset": "tidy",
+            "configuration": "Debug"
+        },
+        {
+            "name": "ci",
+            "configurePreset": "ci",
+            "configuration": "Debug"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "dev",
+            "configurePreset": "dev",
+            "configuration": "Debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "asan",
+            "configurePreset": "asan",
+            "configuration": "Debug",
+            "output": {
+                "outputOnFailure": true
+            },
+            "environment": {
+                "ASAN_OPTIONS": "detect_container_overflow=0:detect_leaks=0",
+                "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1"
+            }
+        },
+        {
+            "name": "tsan",
+            "configurePreset": "tsan",
+            "configuration": "Debug",
+            "output": {
+                "outputOnFailure": true
+            },
+            "environment": {
+                "TSAN_OPTIONS": "halt_on_error=1"
+            }
+        },
+        {
+            "name": "ci",
+            "configurePreset": "ci",
+            "configuration": "Debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        }
+    ]
+}

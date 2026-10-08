@@ -1,0 +1,174 @@
+// Hand-written fixture for PTSL GUI tests. It imitates the structure of a PTSL-style
+// protocol definition but contains no SDK content.
+syntax = "proto3";
+
+package ptsl;
+
+enum CommandId
+{
+	// @cond hidden_from_doxygen
+	reserved 7;
+	option allow_alias = true;
+	/// @endcond
+	/**
+	 * RemovedThing is gone.
+	 */
+	reserved "RemovedThing";
+
+	/**
+	 * @deprecated use CId_MakeWidget
+	 */
+	MakeWidget = 0;
+	/**
+	 * Makes a new widget.
+	 * Spans two lines.
+	 *
+	 * @request_body_type MakeWidgetRequestBody
+	 *
+	 * Simple widget.
+	 * @request_body_json_example
+	 * {
+	 * 	"name": "w1",
+	 * 	"size": 3
+	 * }
+	 * @end_example
+	 *
+	 * A coloured widget,
+	 * with a caption on two lines.
+	 * @request_body_json_example
+	 * {
+	 *   "name": "w2",
+	 *   "colour": "WColour_Red",
+	 * }
+	 *
+	 * # trailing commas are tolerated
+	 * @end_example
+	 *
+	 * @response_body_type MakeWidgetResponseBody
+	 * @response_body_json_example
+	 * {
+	 *   "widget_id": "abc"
+	 *   "created": true
+	 * }
+	 * @end_example
+	 *
+	 * @category_widgets
+	 * @category_all
+	 *
+	 * @since Widget Host 2023.3
+	 */
+	CId_MakeWidget = 0;
+
+	/**
+	 * @brief Lists widgets.
+	 *
+	 * @details Returns all widgets. Kinds:
+	 *
+	 * - Round
+	 * -# has no corners
+	 * - Square
+	 *
+	 * @note Results are paged.
+	 * Use the pagination fields.
+	 *
+	 * TODO add response example
+	 *
+	 * @sa MakeWidget
+	 *
+	 * @category_widgets
+	 * @category_queries
+	 * @category_all
+	 *
+	 * @since Widget Host 2024.1.2
+	 */
+	CId_ListWidgets = 1;
+
+	/**
+	 * Pings the host.
+	 *
+	 * @category_utility
+	 * @category_all
+	 */
+	CId_Ping = 2;
+
+	/**
+	 * Deletes a widget.
+	 *
+	 * @request_body_type DeletWidgetRequestBody
+	 * @request_body_json_example
+	 * {
+	 *   "names": ["a", ...]
+	 * }
+	 * @end_example
+	 *
+	 * @deprecated since Widget Host 2025.1, use CId_MakeWidget with size 0
+	 * @category_widgets
+	 * @category_editing
+	 * @category_all
+	 * @since Widget Host 2023.3
+	 */
+	CId_DeleteWidget = 3;
+	OldDeleteWidget = 3;
+	AncientDeleteWidget = 3;
+
+	CId_GetPTSLVersion = 4;
+
+	CId_None = -1;
+}
+
+enum WidgetColour
+{
+	WColour_None = 0;
+	WColour_Red = 1;
+	WColour_Green = 2;
+}
+
+message Geometry
+{
+	double width = 1;
+	double height = 2;
+}
+
+// Request for making a widget.
+message MakeWidgetRequestBody
+{
+	// Display name of the widget.
+	string name = 1;
+	int32 size = 2; // Edge length in units.
+	WidgetColour colour = 3;
+	bool visible = 4;
+	Geometry geometry = 5;
+	repeated string tags = 6;
+	repeated Geometry parts = 7;
+	oneof placement
+	{
+		string folder = 8;
+		int64 slot = 9;
+	}
+	map<string, string> attributes = 10;
+	optional float opacity = 11;
+	bytes payload = 12;
+	uint32 count = 13;
+}
+
+message MakeWidgetResponseBody
+{
+	string widget_id = 1;
+	bool created = 2;
+}
+
+message ListWidgetsRequestBody
+{
+	int32 limit = 1;
+	int32 offset = 2;
+}
+
+message ListWidgetsResponseBody
+{
+	repeated MakeWidgetRequestBody widgets = 1;
+}
+
+message DeleteWidgetRequestBody
+{
+	repeated string names = 1;
+}

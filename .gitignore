@@ -1,0 +1,12 @@
+/PTSL_SDK_CPP.*/
+/build/
+/out/
+.DS_Store
+CMakeUserPresets.json
+compile_commands.json
+*.proto
+!tests/fixtures/**/*.proto
+command_catalog.json
+__pycache__/
+.pytest_cache/
+/dist/

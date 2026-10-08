@@ -1,0 +1,25 @@
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: Latest
+IndentWidth: 4
+ColumnLimit: 120
+PointerAlignment: Left
+ReferenceAlignment: Left
+AccessModifierOffset: -4
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortLambdasOnASingleLine: All
+AlwaysBreakTemplateDeclarations: Yes
+BreakConstructorInitializers: BeforeComma
+PackConstructorInitializers: CurrentLine
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^"'
+    Priority: 1
+  - Regex: '^<ptslgui/'
+    Priority: 2
+  - Regex: '^<(google|nlohmann|catch2|Q)'
+    Priority: 3
+  - Regex: '^<'
+    Priority: 4
+InsertNewlineAtEOF: true
+SeparateDefinitionBlocks: Always
