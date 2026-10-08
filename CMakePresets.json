@@ -52,6 +52,16 @@
                 "PTSLGUI_WARNINGS_AS_ERRORS": "ON",
                 "PTSL_SDK_DIR": ""
             }
+        },
+        {
+            "name": "dist",
+            "displayName": "Distributable app (macOS 13.3+, Conan dependencies, official Qt)",
+            "inherits": "base",
+            "toolchainFile": "${sourceDir}/build/conan-dist/conan_toolchain.cmake",
+            "cacheVariables": {
+                "CMAKE_CONFIGURATION_TYPES": "Release",
+                "CMAKE_PREFIX_PATH": "$env{HOME}/Qt/6.11.3/macos"
+            }
         }
     ],
     "buildPresets": [
@@ -84,6 +94,11 @@
             "name": "ci",
             "configurePreset": "ci",
             "configuration": "Debug"
+        },
+        {
+            "name": "dist",
+            "configurePreset": "dist",
+            "configuration": "Release"
         }
     ],
     "testPresets": [
@@ -122,6 +137,14 @@
             "name": "ci",
             "configurePreset": "ci",
             "configuration": "Debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "dist",
+            "configurePreset": "dist",
+            "configuration": "Release",
             "output": {
                 "outputOnFailure": true
             }

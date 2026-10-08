@@ -10,3 +10,4 @@ command_catalog.json
 __pycache__/
 .pytest_cache/
 /dist/
+aqtinstall.log

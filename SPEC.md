@@ -16,7 +16,7 @@ A C++ desktop application that wraps every command in the Avid PTSL (Pro Tools S
 - C++26, limited to what GCC, Clang and MSVC all support. CMake + Ninja Multi-Config. Strict warnings, clang-format (repo `.clang-format`; there is no `~/.clang-format` on this machine), clang-tidy, ASan/UBSan/TSan builds.
 - GUI: Qt 6 Widgets.
 - Tests: Catch2. No test requires Pro Tools; the PTSL client is behind an interface and faked.
-- Platform: macOS only, Apple Silicon (arm64) only. No Intel (x86_64) or universal binaries; the SDK, the app and all dependencies are built for arm64. No Windows or Linux app, installer or SDK build support. The only non-Mac build is the SDK-independent core + tests on Linux/GCC in CI, kept as a check that the code stays within the GCC/Clang/MSVC-portable C++26 subset; it is not a supported platform and Mac-specific code is allowed outside `core/`.
+- Platform: macOS 13.3 or later, Apple Silicon (arm64) only. The distributable app, the SDK framework and every bundled library are built with a 13.3 deployment target (13.3 rather than 13.0 because libc++'s floating-point `std::format`/`to_chars` needs the macOS 13.3 runtime). No Intel (x86_64) or universal binaries; the SDK, the app and all dependencies are built for arm64. No Windows or Linux app, installer or SDK build support. The only non-Mac build is the SDK-independent core + tests on Linux/GCC in CI, kept as a check that the code stays within the GCC/Clang/MSVC-portable C++26 subset; it is not a supported platform and Mac-specific code is allowed outside `core/`.
 - The PTSL SDK (`PTSL_SDK_CPP.*/`) is Avid-confidential. It lives in the project folder, is git-ignored, and must never be pushed. Nothing derived verbatim from it (proto files, generated code, the generated catalog, copied doc comments or examples) may be committed either; all of that is produced at build time from the local SDK copy.
 - Personal use only: no distribution, no notarisation, ad-hoc code signing only.
 
@@ -203,26 +203,29 @@ Every editor is a `FieldEditor` (QWidget) with `setJson(value)`, `reset()`, `jso
 ## Build
 
 - CMake ≥ 3.28; on macOS `CMAKE_OSX_ARCHITECTURES` is fixed to `arm64`. C++26 (`CMAKE_CXX_STANDARD 26`), Ninja Multi-Config.
+- Two dependency sources:
+  - Development presets (`dev`, `asan`, `tsan`, `tidy`): Homebrew protobuf, nlohmann_json, Catch2 and Qt, built for the running macOS. Fast to set up; binaries only run on this machine's macOS.
+  - `dist` preset: `conanfile.py` (protobuf 6.33.5, nlohmann_json 3.12.0, Catch2 3.16.0; CMakeDeps + CMakeToolchain without user presets) installed with profile `tools/conan/macos13` (`os.version=13.3`, armv8, apple-clang 21, libc++, cppstd 20, Release, static libraries) into `build/conan-dist`, using the Conan cache `~/.ptslconan`; and the official Qt 6.11.3 binaries (minimum macOS 13.0, universal) from aqtinstall in `~/Qt`. Homebrew's Qt cannot be used because its frameworks require macOS 14, and its protobuf/abseil require the running macOS.
 - Dependencies found with `find_package`: protobuf (config package, falling back to CMake's FindProtobuf), nlohmann_json ≥ 3.11, Catch2 3, Python 3 (catalog generation). Locally from Homebrew; in CI from Ubuntu packages.
 - Options: `PTSLGUI_BUILD_TESTS` (ON), `PTSLGUI_WARNINGS_AS_ERRORS` (OFF), `PTSLGUI_CLANG_TIDY` (OFF), `PTSLGUI_SANITIZE` (comma-separated: address, undefined, thread).
 - `ptslgui_configure_target()` (`cmake/PtslGuiOptions.cmake`) applies strict warnings (`-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wold-style-cast …`) and sanitizer flags to project targets only.
 - `cmake/PtslGuiSdk.cmake`: `PTSL_SDK_DIR` cache variable, defaulting to the newest `PTSL_SDK_CPP.*` folder in the project root (empty when absent; the `ci` preset forces it empty). Sets `PTSLGUI_SDK_PROTO` when the SDK proto exists. `ptslgui_generate_catalog(proto output)` adds a build step running `gen_catalog.py`.
-- Presets (`CMakePresets.json`, build dirs `build/<preset>`): `dev`, `asan` (address+undefined), `tsan`, `tidy` (clang-tidy during compile), `ci` (no SDK, warnings as errors). Build presets use Debug (plus `dev-release`). Test presets set `ASAN_OPTIONS=detect_container_overflow=0:detect_leaks=0` (container-overflow false positives from uninstrumented Homebrew Catch2; LeakSanitizer is unsupported on macOS arm64) and `halt_on_error` for UBSan/TSan.
+- Presets (`CMakePresets.json`, build dirs `build/<preset>`): `dev`, `asan` (address+undefined), `tsan`, `tidy` (clang-tidy during compile), `ci` (no SDK, warnings as errors), `dist` (Release only; Conan toolchain `build/conan-dist/conan_toolchain.cmake`, Qt from `$HOME/Qt/6.11.3/macos`, deployment target 13.3). Build presets use Debug (plus `dev-release`). Test presets set `ASAN_OPTIONS=detect_container_overflow=0:detect_leaks=0` (container-overflow false positives from uninstrumented Homebrew Catch2; LeakSanitizer is unsupported on macOS arm64) and `halt_on_error` for UBSan/TSan.
 - clang-tidy config in `.clang-tidy` (broad check set; noisy checks disabled); `tests/.clang-tidy` additionally disables `bugprone-unchecked-optional-access` (Catch2 `REQUIRE` guards are invisible to it) and static-initialisation checks.
 - `PTSLGUI_BUILD_UI` (default ON on Apple): finds Qt 6 (Widgets, Concurrent, Test), builds `ptslgui_ui` and its tests. When the SDK client framework is also found (`find_package(PTSLC_CPP CONFIG)` in `PTSL_SDK_CPP.*/install/arm64/Release/PTSLC_CPP`, i.e. after `tools/build_sdk.py`), it builds `ptslgui_sdk`, its tests and the app; otherwise the app is skipped with a message.
 - App bundle `PTSL GUI.app` (`build/<preset>/app/<config>/`): bundle id `io.github.claude-coder-collab.ptsl-gui`; the SDK's `PTSL.proto` and the generated catalog are embedded as Qt resources `:/ptsl/PTSL.proto` and `:/ptsl/catalog.json` (generated into the build tree, never committed); post-build `ditto` copies `PTSLC_CPP.framework` into `Contents/Frameworks` (rpath `@executable_path/../Frameworks`) and the bundle is ad-hoc signed (`codesign --force --deep --sign -`). Qt and protobuf are linked from Homebrew by absolute path; a self-contained bundle via `macdeployqt` is milestone 6. No Developer ID signing or notarisation.
-- `tools/package_app.py [--skip-build] [--output dist]`: builds the Release app (`dev-release` preset), copies it to `dist/PTSL GUI.app` (git-ignored), runs `macdeployqt` with `-libpath` for every Homebrew Qt keg (`/opt/homebrew/opt/qt*/lib`, because Homebrew splits Qt modules into separate kegs), removes plugins whose `@rpath` dependencies were not deployed (currently the SVG icon engine, PDF image format and virtual keyboard input context), fails if any other binary has undeployed dependencies, ad-hoc signs, verifies the signature, and fails if any Mach-O file still references `/opt/homebrew` or `/usr/local` (ignoring each library's own install name). The result is about 112 MB and loads no Homebrew libraries. **It embeds the SDK proto and framework: personal use only, never publish it.**
+- `tools/package_app.py [--skip-build] [--skip-tests] [--output dist]`: builds the `dist` preset (installing Qt 6.11.3 with `aqt install-qt mac desktop 6.11.3 clang_64 --outputdir ~/Qt` and the Conan dependencies if needed), runs its tests, copies the app to `dist/PTSL GUI.app` (git-ignored), runs the official Qt's `macdeployqt`, thins universal binaries to arm64 (`lipo -thin`), removes plugins whose `@rpath` dependencies were not deployed, and fails if any other binary has undeployed dependencies, any Mach-O file references `/opt/homebrew` or `/usr/local` (ignoring a library's own install name), any binary's minimum macOS (`LC_BUILD_VERSION minos` / `LC_VERSION_MIN_MACOSX`, highest across architectures) is above 13.3, or `Info.plist` `LSMinimumSystemVersion` is not 13.3. It then ad-hoc signs and verifies the signature. **The bundle embeds the SDK proto and framework: personal use only, never publish it.**
 - `--demo` runs the app with a `FakePtslSession` (auto-delivering; GetPTSLVersion answers 2026.4; every other command completes with `{}`).
 - clang-tidy runs with `--warnings-as-errors=*`; `cppcoreguidelines-owning-memory` is disabled because Qt parents own their children.
 
 ### Running
 
 ```sh
-python3 tools/build_sdk.py            # once per SDK version
+python3 tools/build_sdk.py            # once per SDK version (framework for macOS 13.3+)
 cmake --preset dev && cmake --build --preset dev
 open "build/dev/app/Debug/PTSL GUI.app"                       # real Pro Tools
 "build/dev/app/Debug/PTSL GUI.app/Contents/MacOS/PTSL GUI" --demo  # no Pro Tools needed
-python3 tools/package_app.py          # self-contained dist/PTSL GUI.app (personal use only)
+python3 tools/package_app.py          # self-contained dist/PTSL GUI.app for macOS 13.3+ (personal use only)
 ```
 
 ### Building the PTSL SDK (`tools/build_sdk.py`)
@@ -232,18 +235,19 @@ The SDK ships its own Conan + CMake build (`setup/build_cpp_ptsl_sdk.py`), which
 | Problem | Workaround |
 |---|---|
 | Conan cache is placed inside the SDK folder; the project path contains a space, which breaks OpenSSL's makefile build | `CONAN_HOME=~/.ptslconan` (must not contain spaces) |
-| Conan rejects the detected macOS version (e.g. 27.2) | `PTSL_OS_VERSION` set to the installed macOS SDK version (`xcrun --show-sdk-version`, e.g. 27.0) |
+| Conan rejects the detected macOS version (e.g. 27.2), and the framework must run on the project's minimum macOS | `PTSL_OS_VERSION` set to `--os-version` (default 13.3), which becomes Conan's `os.version` and the deployment target |
+| c-ares' configure check finds `pipe2()` in the macOS 27 SDK headers, which is unavailable on 13.3 (`-Werror,-Wunguarded-availability-new`, and it would fail to load on older macOS) | `~/.ptslconan/global.conf` gets `c-ares/*:tools.cmake.cmaketoolchain:extra_variables={"HAVE_PIPE2": "0"}` (added by the script if missing) |
 | Generated presets hard-code the Xcode generator; only Command Line Tools are installed | Rewrite `xcode` → `ninja` (Ninja Multi-Config) in the generated `CMakeUserPresets.json`, then run `cmake --workflow` |
-| `find_program(protoc)` picks Homebrew's newer protoc, producing code incompatible with Conan's protobuf headers | Prepend Conan's `protoc` and `grpc_cpp_plugin` bin dirs to `PATH`; clear stale `CMakeCache.txt` |
+| `find_program(protoc)` picks Homebrew's newer protoc (or another protobuf in the shared Conan cache), producing code incompatible with the SDK's protobuf headers | Prepend the `bin` dirs of the exact protobuf and gRPC packages the SDK resolved (read from `set(<pkg>_PACKAGE_FOLDER_RELEASE "…")` in `MacBuild/arm64/Dependencies/*-release-*-data.cmake`) to `PATH`; clear stale `CMakeCache.txt` |
 
 - A persistent venv at `~/.ptsl-venv` holds the SDK's Python requirements (Conan, CMake, Jinja2) plus pytest.
-- Always arm64 (no `--arch` option). Default `--config Release`; `--with-ptslcmd` also builds the example CLI.
+- Always arm64 (no `--arch` option). Default `--config Release`, `--os-version 13.3`. The generated `CMakeUserPresets.json` is deleted before each run, so a failed Conan step is detected instead of reusing stale presets; `--with-ptslcmd` also builds the example CLI.
 - Output: `PTSL_SDK_CPP.*/install/arm64/<config>/PTSLC_CPP/PTSLC_CPP.framework` (with `Resources/CMake/PTSLC_CPPConfig.cmake` for `find_package`) and `.../ptslcmd/ptslcmd`.
 - Dependency versions in use (SDK `conanfile.py`): gRPC 1.72.0, protobuf 5.27.0 (`protoc` 27.0), OpenSSL 3.6.0, nlohmann_json 3.12.0, date 3.0.4.
 
 ### protobuf for the GUI
 
-Because the schema is parsed at runtime (see Architecture), the GUI uses whatever protobuf `find_package` finds: Homebrew's (36.x) locally, Ubuntu's (3.21) in CI. `schema.cpp` supports both APIs (error collectors switch on `GOOGLE_PROTOBUF_VERSION` ≥ 4.22). Confirmed in milestone 4: the SDK framework exports no protobuf symbols and both work in one process (covered by an SDK test).
+Because the schema is parsed at runtime (see Architecture), the GUI uses whatever protobuf `find_package` finds: Homebrew's (36.x) for development, Conan's 6.33.5 (static) for the `dist` build, Ubuntu's (3.21) in CI. `schema.cpp` supports both APIs (error collectors switch on `GOOGLE_PROTOBUF_VERSION` ≥ 4.22). Confirmed in milestone 4: the SDK framework exports no protobuf symbols and both work in one process (covered by an SDK test).
 
 ## Testing
 
@@ -253,7 +257,8 @@ Because the schema is parsed at runtime (see Architecture), the GUI uses whateve
 - Protocol helpers: task-status mapping, version / host-ready parsing, RegisterConnection body, error parsing.
 - **UI** (`tests/ui`, own `main` creating a `QApplication` with `QT_QPA_PLATFORM=offscreen`, fixture proto + catalog, `FakePtslSession` with auto-delivery): grouping and filtering, command selection and examples, validation, formatting, connect/version/disconnect, failed connect, sending and response tree/JSON, error display, unsupported-command warning, helper functions. Widgets are found by object name; asynchronous results are awaited with `QTest::qWaitFor`.
 - **History, settings, confirmations** (`tests/ui/test_history_settings.cpp`): `AppSettings` defaults and persistence; confirmation asked for mutating commands only, Cancel blocks sending, "Don't ask again" and the menu toggle turn it off (and back on); resend is confirmed; Preferences OK/Cancel/forget; history ordering, selection, copy, load, resend, clear; export/import including bad files and paths; remembered requests (and ignoring invalid ones); address, launch flag and last command restored in a new window; panel helpers. The fixture's `CId_DeleteWidget` carries `@category_editing` so a mutating command exists.
-- **Packaging** (`tests/tools/test_package_app.py`): otool output parsing, external-reference and missing-`@rpath` detection, Mach-O detection, Qt keg discovery.
+- **Packaging** (`tests/tools/test_package_app.py`): otool `-L`/`-D`/`-l` parsing (including the highest minimum macOS across architectures and old-style `LC_VERSION_MIN_MACOSX`), version ordering, external-reference and missing-`@rpath` detection, Mach-O detection, `LSMinimumSystemVersion` reading. `tests/tools/test_build_sdk.py` covers reading Conan package folders and idempotent `global.conf` updates.
+- The full suite also runs in the `dist` build (`ctest --preset dist`, run by `package_app.py`), against Conan protobuf 6.33 and the official Qt.
 - **SDK** (`tests/sdk`, only when the framework is built): unreachable host gives a "not ready" error quickly; sending while disconnected fails; runtime schema and SDK client coexist in one process. No test needs Pro Tools.
 - Hidden test `[.screenshot]` renders the main window with the real catalog and a fake session to the PNG path in `PTSLGUI_SCREENSHOT` (for visual checks; `screencapture` is unavailable on this machine).
 - **Forms** (`tests/ui/test_form_editor.cpp`): round-trip of generated samples through `MessageEditor` for every fixture message (60 seeds) and every SDK request type (4 seeds, when the SDK is present); defaults omitted; integer validators; optional presence; oneof selection and loading; lazy nested messages; repeated add/remove; maps; tooltips; Form ⇄ JSON tab sync including invalid JSON blocking the switch.
@@ -282,9 +287,10 @@ Because the schema is parsed at runtime (see Architecture), the GUI uses whateve
 - Protocol: latest only.
 - Command sequences: v2.
 - Distribution: personal use, ad-hoc signing only.
-- Platform: macOS, Apple Silicon (arm64) only.
+- Platform: macOS 13.3+, Apple Silicon (arm64) only.
 
-- protobuf: parsed at runtime; any recent protobuf (Homebrew locally, Ubuntu in CI).
+- protobuf: parsed at runtime; any recent protobuf (Homebrew for development, Conan for distribution, Ubuntu in CI).
+- Distributable dependencies: Conan (macOS 13.3 profile) and the official Qt binaries via aqtinstall.
 - JSON: nlohmann_json in core.
 
 ## Open questions
@@ -307,3 +313,4 @@ None currently.
 - Milestone 4 done: SDK session, Qt UI and app bundle with demo mode; 59 tests (core, UI offscreen, SDK without Pro Tools) pass in dev, ASan+UBSan and TSan; clang-tidy clean with warnings as errors. Not yet tried against a running Pro Tools.
 - Milestone 5 done: generated request forms with Form ⇄ JSON sync; sample generator; 75 tests pass in dev, ASan+UBSan and TSan; clang-tidy clean.
 - Milestone 6 done: history dock, preferences and persisted settings, confirmations for session-modifying commands with a user setting to turn them off, menus, copy button, form layout fixes, self-contained ad-hoc-signed bundle via `tools/package_app.py`; 87 tests pass in dev, ASan+UBSan and TSan; clang-tidy clean.
+- macOS 13.3 support: `dist` preset (Conan dependencies, official Qt 6.11.3), SDK framework rebuilt for 13.3, `package_app.py` verifies every binary targets ≤ 13.3; the packaged app is 47 MB, loads no Homebrew libraries and starts in demo mode. Not run on an actual macOS 13 machine (only this macOS 27.2 host is available).
