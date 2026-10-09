@@ -113,20 +113,76 @@ enum CommandId
 
 	CId_GetPTSLVersion = 4;
 
+	/**
+	 * Undoes the last edit.
+	 *
+	 * @request_body_type UndoRequestBody
+	 *
+	 * @category_editing
+	 * @category_all
+	 *
+	 * @since Widget Host 2024.6
+	 */
+	CId_Undo = 5;
+
+	/**
+	 * Redoes the last undone edit.
+	 *
+	 * @request_body_type RedoRequestBody
+	 *
+	 * @category_editing
+	 * @category_all
+	 *
+	 * @since Widget Host 2024.6
+	 */
+	CId_Redo = 6;
+
+	/**
+	 * Selects a time range.
+	 *
+	 * @request_body_type SetSelectionRequestBody
+	 *
+	 * @category_widgets
+	 * @category_all
+	 *
+	 * @since Widget Host 2024.6
+	 */
+	CId_SetSelection = 8;
+
 	CId_None = -1;
 }
 
 enum WidgetColour
 {
+	option allow_alias = true;
+
 	WColour_None = 0;
+	/**
+	 * @deprecated use WColour_Red
+	 */
+	Red = 1;
+	/**
+	 * A warm colour.
+	 */
 	WColour_Red = 1;
 	WColour_Green = 2;
 }
 
 message Geometry
 {
+	enum Unit
+	{
+		option allow_alias = true;
+
+		Unit_None = 0;
+		// @deprecated use Unit_Mm
+		Mm = 1;
+		Unit_Mm = 1; // Millimetres.
+	}
+
 	double width = 1;
 	double height = 2;
+	Unit unit = 3;
 }
 
 // Request for making a widget.
@@ -171,4 +227,41 @@ message ListWidgetsResponseBody
 message DeleteWidgetRequestBody
 {
 	repeated string names = 1;
+}
+
+message UndoRequestBody
+{
+	int32 levels = 1;
+}
+
+message RedoRequestBody
+{
+	int32 levels = 1;
+}
+
+enum TimelineLocationType
+{
+	TLType_Unknown = 0;
+	TLType_Samples = 1;
+	// Clock time, MM:SS.mmm.
+	TLType_MinSecs = 4;
+	TLType_TimeCode = 5;
+	TLType_BarsBeats = 6;
+	TLType_FeetFrames = 7;
+	TLType_Seconds = 8;
+}
+
+message TimelineLocation
+{
+	string location = 1;
+	TimelineLocationType time_type = 2;
+}
+
+message SetSelectionRequestBody
+{
+	string in_time = 1;
+	string out_time = 2;
+	string session_location = 3;
+	TimelineLocationType location_type = 4;
+	TimelineLocation play_start = 5;
 }

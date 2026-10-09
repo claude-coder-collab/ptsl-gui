@@ -79,7 +79,8 @@ private:
     void requestHostVersion();
     void updateConnectionUi();
     void sendCurrent();
-    bool send(const CommandInfo& command, const std::string& requestJson, bool fromEditor);
+    bool send(const CommandInfo& command, const std::string& requestJson, bool fromEditor, bool confirm = true);
+    void sendUndoRedo(const char* commandName);
     void onEntryUpdated(const HistoryEntry& entry);
     void showHistoryEntry(std::uint64_t sequence);
     void loadHistoryEntry(std::uint64_t sequence);
@@ -110,6 +111,8 @@ private:
     QAction* connectAction_ = nullptr;
     QAction* cancelAction_ = nullptr;
     QAction* confirmAction_ = nullptr;
+    QAction* undoAction_ = nullptr;
+    QAction* redoAction_ = nullptr;
     QLabel* connectionLabel_ = nullptr;
 
     const CommandInfo* current_ = nullptr;

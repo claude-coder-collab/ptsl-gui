@@ -11,9 +11,12 @@ namespace ptslgui {
 
 enum class FieldKind { Bool, Int32, Int64, UInt32, UInt64, Float, Double, String, Bytes, Enum, Message };
 
+/// One enum number. Aliased names (allow_alias) are folded into the preferred, non-deprecated name.
 struct EnumValue {
     std::string name;
     int number = 0;
+    std::vector<std::string> aliases;
+    std::string comment;
 };
 
 /// Description of one field of a protobuf message, enough to build an editor for it.
@@ -45,6 +48,8 @@ struct MessageSpec {
 
 struct JsonFormat {
     bool pretty = false;
+    /// Also print fields without presence at their default values, as the PTSL SDK does when sending.
+    bool includeDefaults = false;
 };
 
 /// A protobuf schema parsed at runtime from .proto source text. Move-only.
@@ -67,7 +72,8 @@ public:
     [[nodiscard]] std::optional<std::vector<EnumValue>> enumValues(std::string_view name) const;
     [[nodiscard]] std::vector<std::string> messageNames() const;
 
-    /// Parses JSON as the given message and re-serialises it with proto field names, omitting default values.
+    /// Parses JSON as the given message and re-serialises it with proto field names, omitting default values
+    /// unless format.includeDefaults is set. Enum values are printed by their preferred name.
     /// An empty or whitespace-only input is treated as "{}".
     [[nodiscard]] std::expected<std::string, std::string>
     normalizeJson(std::string_view messageName, std::string_view json, JsonFormat format = {}) const;

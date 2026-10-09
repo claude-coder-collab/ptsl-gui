@@ -82,8 +82,12 @@ TEST_CASE("Controller sends, records history and reports updates on the dispatch
     const auto sent = fixture.session.sent();
     REQUIRE(sent.size() == 1);
     CHECK(sent[0].commandId == makeWidget);
-    CHECK(sent[0].requestJson == R"({"name":"a"})");
+    CHECK(json::parse(sent[0].requestJson) == json::parse(R"({
+        "name": "a", "size": 0, "colour": "WColour_None", "visible": false, "tags": [], "parts": [],
+        "attributes": {}, "payload": "", "count": 0
+    })"));
     REQUIRE(fixture.history.find(*sequence) != nullptr);
+    CHECK(fixture.history.find(*sequence)->requestJson == sent[0].requestJson);
     CHECK(fixture.history.find(*sequence)->commandName == "CId_MakeWidget");
     CHECK(fixture.history.find(*sequence)->outcome == Outcome::Pending);
 

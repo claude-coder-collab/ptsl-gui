@@ -1,10 +1,12 @@
 #pragma once
 
 #include <ptslgui/schema.hpp>
+#include <ptslgui/time_format.hpp>
 
 #include <QWidget>
 #include <nlohmann/json.hpp>
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -31,6 +33,9 @@ public:
     [[nodiscard]] virtual FormJson json() const = 0;
     /// True when the value equals the proto3 default and would be omitted from JSON.
     [[nodiscard]] virtual bool isDefault() const = 0;
+
+    /// Shows the expected format of a time location; only string editors use it.
+    virtual void setTimeFormat(const std::optional<TimeFormat>& /*format*/) {}
 
 signals:
     void changed();
@@ -70,11 +75,14 @@ private:
     };
 
     FieldEditor* oneofEditor(Oneof& oneof, std::size_t member);
+    void connectTimeUnit();
+    void updateTimeFormats();
 
     const ProtoSchema& schema_;
     MessageSpec spec_;
     std::vector<Row> rows_;
     std::vector<Oneof> oneofs_;
+    const Row* timeUnit_ = nullptr;
 };
 
 /// Singular message field: a checkable group that creates its nested editor on first use.

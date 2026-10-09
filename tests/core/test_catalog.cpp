@@ -21,7 +21,7 @@ std::vector<std::string> names(const std::vector<const CommandInfo*>& commands) 
 
 TEST_CASE("Catalog loads the generated fixture catalog") {
     const auto& catalog = test::fixtureCatalog();
-    REQUIRE(catalog.commands().size() == 5);
+    REQUIRE(catalog.commands().size() == 8);
     CHECK(catalog.categories() == std::vector<std::string>{"editing", "queries", "utility", "widgets"});
 
     const CommandInfo* make = catalog.findById(0);
@@ -53,7 +53,7 @@ TEST_CASE("Catalog finds commands by name, short name and alias") {
 
 TEST_CASE("Catalog search matches all terms case-insensitively") {
     const auto& catalog = test::fixtureCatalog();
-    CHECK(names(catalog.search({})).size() == 5);
+    CHECK(names(catalog.search({})).size() == 8);
     CHECK(names(catalog.search({.text = "WIDGET", .category = {}, .includeDeprecated = true})) ==
           std::vector<std::string>{"CId_MakeWidget", "CId_ListWidgets", "CId_DeleteWidget"});
     CHECK(names(catalog.search({.text = "make   new", .category = {}, .includeDeprecated = true})) ==

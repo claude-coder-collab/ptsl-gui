@@ -12,7 +12,11 @@
 #include <algorithm>
 #include <format>
 #include <limits>
+#include <map>
 #include <mutex>
+#include <numeric>
+#include <ranges>
+#include <vector>
 
 namespace ptslgui {
 namespace {
@@ -69,14 +73,39 @@ std::string trimmed(std::string_view text) {
     return std::string(text.substr(first, last - first + 1));
 }
 
+/// Removes Doxygen block decoration ("*" line prefixes) and surrounding blank lines from a proto comment.
+std::string cleanComment(std::string_view comment) {
+    std::string result;
+    std::string pendingBlank;
+    std::size_t start = 0;
+    while (start <= comment.size()) {
+        const auto end = std::min(comment.find('\n', start), comment.size());
+        std::string line = trimmed(comment.substr(start, end - start));
+        if (line.starts_with('*')) {
+            line = trimmed(std::string_view(line).substr(1));
+        }
+        if (line.empty()) {
+            pendingBlank += result.empty() ? "" : "\n";
+        } else {
+            if (!result.empty()) {
+                result += pendingBlank.empty() ? "\n" : "\n\n";
+            }
+            pendingBlank.clear();
+            result += line;
+        }
+        start = end + 1;
+    }
+    return result;
+}
+
 template <typename Descriptor>
 std::string commentOf(const Descriptor& descriptor) {
     pb::SourceLocation location;
     if (!descriptor.GetSourceLocation(&location)) {
         return {};
     }
-    const std::string leading = trimmed(location.leading_comments);
-    const std::string trailing = trimmed(location.trailing_comments);
+    const std::string leading = cleanComment(location.leading_comments);
+    const std::string trailing = cleanComment(location.trailing_comments);
     if (leading.empty() || trailing.empty()) {
         return leading + trailing;
     }
@@ -115,10 +144,107 @@ std::vector<EnumValue> enumValuesOf(const pb::EnumDescriptor& descriptor) {
     values.reserve(static_cast<std::size_t>(descriptor.value_count()));
     for (int i = 0; i < descriptor.value_count(); ++i) {
         const auto* value = descriptor.value(i);
-        values.push_back(EnumValue{.name = std::string(value->name()), .number = value->number()});
+        if (const auto existing = std::ranges::find(values, value->number(), &EnumValue::number);
+            existing != values.end()) {
+            existing->aliases.emplace_back(value->name());
+            continue;
+        }
+        values.push_back(EnumValue{.name = std::string(value->name()),
+                                   .number = value->number(),
+                                   .aliases = {},
+                                   .comment = commentOf(*value)});
     }
     return values;
 }
+
+using SourcePath = std::vector<int>;
+
+SourcePath childPath(SourcePath path, std::initializer_list<int> children) {
+    path.insert(path.end(), children);
+    return path;
+}
+
+/// Moves the first non-deprecated name of each aliased enum number to the front of its group, so that protobuf
+/// (which prints the first declared name) and the form prefer current names. Source locations follow the values.
+class AliasOrder {
+public:
+    explicit AliasOrder(pb::FileDescriptorProto& file) : file_(&file) {
+        for (const auto& location : file_->source_code_info().location()) {
+            comments_.emplace(SourcePath(location.path().begin(), location.path().end()),
+                              location.leading_comments() + location.trailing_comments());
+        }
+    }
+
+    void apply() {
+        for (int i = 0; i < file_->enum_type_size(); ++i) {
+            reorder(*file_->mutable_enum_type(i), {pb::FileDescriptorProto::kEnumTypeFieldNumber, i});
+        }
+        for (int i = 0; i < file_->message_type_size(); ++i) {
+            visit(*file_->mutable_message_type(i), {pb::FileDescriptorProto::kMessageTypeFieldNumber, i});
+        }
+        remapLocations();
+    }
+
+private:
+    void visit(pb::DescriptorProto& message, const SourcePath& path) { // NOLINT(misc-no-recursion)
+        for (int i = 0; i < message.enum_type_size(); ++i) {
+            reorder(*message.mutable_enum_type(i), childPath(path, {pb::DescriptorProto::kEnumTypeFieldNumber, i}));
+        }
+        for (int i = 0; i < message.nested_type_size(); ++i) {
+            visit(*message.mutable_nested_type(i), childPath(path, {pb::DescriptorProto::kNestedTypeFieldNumber, i}));
+        }
+    }
+
+    [[nodiscard]] bool isDeprecated(const SourcePath& enumPath, int index) const {
+        const auto it = comments_.find(childPath(enumPath, {pb::EnumDescriptorProto::kValueFieldNumber, index}));
+        return it != comments_.end() && it->second.contains("@deprecated");
+    }
+
+    void reorder(pb::EnumDescriptorProto& enumProto, const SourcePath& path) {
+        std::map<int, std::vector<int>> byNumber;
+        for (int i = 0; i < enumProto.value_size(); ++i) {
+            byNumber[enumProto.value(i).number()].push_back(i);
+        }
+        std::vector<int> newIndex(static_cast<std::size_t>(enumProto.value_size()));
+        std::ranges::iota(newIndex, 0);
+        bool changed = false;
+        for (const auto& indices : byNumber | std::views::values) {
+            const auto preferred = std::ranges::find_if(indices, [&](int index) { return !isDeprecated(path, index); });
+            if (preferred == indices.end() || *preferred == indices.front()) {
+                continue;
+            }
+            enumProto.mutable_value()->SwapElements(indices.front(), *preferred);
+            std::swap(newIndex[static_cast<std::size_t>(indices.front())],
+                      newIndex[static_cast<std::size_t>(*preferred)]);
+            changed = true;
+        }
+        if (changed) {
+            renumbered_.emplace(path, std::move(newIndex));
+        }
+    }
+
+    void remapLocations() {
+        if (renumbered_.empty()) {
+            return;
+        }
+        for (auto& location : *file_->mutable_source_code_info()->mutable_location()) {
+            for (const auto& [enumPath, newIndex] : renumbered_) {
+                const auto depth = static_cast<int>(enumPath.size());
+                if (location.path_size() < depth + 2 ||
+                    !std::equal(enumPath.begin(), enumPath.end(), location.path().begin()) ||
+                    location.path(depth) != pb::EnumDescriptorProto::kValueFieldNumber) {
+                    continue;
+                }
+                location.set_path(depth + 1, newIndex[static_cast<std::size_t>(location.path(depth + 1))]);
+                break;
+            }
+        }
+    }
+
+    pb::FileDescriptorProto* file_;
+    std::map<SourcePath, std::string> comments_;
+    std::map<SourcePath, std::vector<int>> renumbered_;
+};
 
 FieldSpec fieldSpecOf(const pb::FieldDescriptor& field) { // NOLINT(misc-no-recursion)
     FieldSpec spec{
@@ -206,6 +332,7 @@ std::expected<ProtoSchema, std::string> ProtoSchema::fromProtoText(std::string_v
         return std::unexpected(std::format("cannot parse {}:\n{}", fileName, joinErrors(tokenizerErrors.errors)));
     }
     fileProto.set_name(std::string(fileName));
+    AliasOrder(fileProto).apply();
 
     auto impl = std::make_unique<Impl>();
     PoolErrors poolErrors;
@@ -287,6 +414,11 @@ std::expected<std::string, std::string> ProtoSchema::normalizeJson(std::string_v
     pb::util::JsonPrintOptions printOptions;
     printOptions.preserve_proto_field_names = true;
     printOptions.add_whitespace = format.pretty;
+#if GOOGLE_PROTOBUF_VERSION >= 5026000
+    printOptions.always_print_fields_with_no_presence = format.includeDefaults;
+#else
+    printOptions.always_print_primitive_fields = format.includeDefaults;
+#endif
     std::string output;
     if (const auto status = pb::util::MessageToJsonString(*message, &output, printOptions); !status.ok()) {
         return std::unexpected(std::string(status.message()));

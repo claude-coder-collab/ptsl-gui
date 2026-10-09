@@ -27,6 +27,8 @@ namespace {
 constexpr int makeWidget = 0;
 constexpr int ping = 2;
 constexpr int getVersion = 4;
+constexpr int undo = 5;
+constexpr int redo = 6;
 constexpr int waitMs = 5000;
 
 Response completed(std::string body) {
@@ -78,7 +80,7 @@ TEST_CASE("Main window lists commands grouped by category") {
     Fixture fixture;
     auto* tree = fixture.child<QTreeWidget>("commandTree");
     CHECK(tree->topLevelItemCount() == 5);
-    CHECK(countCommandItems(tree) == 7);
+    CHECK(countCommandItems(tree) == 10);
     CHECK(fixture.child<QComboBox>("categoryFilter")->count() == 5);
     CHECK(fixture.text("connectionStatus") == "Disconnected");
     CHECK_FALSE(fixture.child<QPushButton>("sendButton")->isEnabled());
@@ -169,7 +171,7 @@ TEST_CASE("Sending shows the response") {
     CHECK(fixture.text("responseMeta").contains("CId_MakeWidget"));
     const auto sent = fixture.session.sent();
     REQUIRE_FALSE(sent.empty());
-    CHECK(sent.back().requestJson == R"({"name":"w"})");
+    CHECK(sent.back().requestJson.starts_with(R"({"name":"w",)"));
 }
 
 TEST_CASE("Failed responses show their errors") {
@@ -189,6 +191,54 @@ TEST_CASE("Failed responses show their errors") {
     const auto* tabs = fixture.child<QTabWidget>("responseTabs");
     CHECK(tabs->tabText(2) == "Errors (1)");
     CHECK(tabs->currentIndex() == 2);
+}
+
+TEST_CASE("A successful response shows the tree") {
+    Fixture fixture;
+    fixture.session.script(
+        ping, {Response{.status = ResponseStatus::Failed,
+                        .progress = 0,
+                        .taskId = {},
+                        .bodyJson = {},
+                        .errorJson = R"({"errors":[{"command_error_type":"PT_X","command_error_message":"nope"}]})"}});
+    fixture.connectSession();
+    REQUIRE(fixture.window.selectCommand(ping));
+    fixture.child<QPushButton>("sendButton")->click();
+    REQUIRE(QTest::qWaitFor([&] { return fixture.text("responseStatus") == "Failed"; }, waitMs));
+    const auto* tabs = fixture.child<QTabWidget>("responseTabs");
+    CHECK(tabs->currentIndex() == 2);
+
+    fixture.session.script(ping, {completed("{}")});
+    fixture.child<QPushButton>("sendButton")->click();
+    REQUIRE(QTest::qWaitFor([&] { return fixture.text("responseStatus") == "Completed"; }, waitMs));
+    CHECK(tabs->currentIndex() == 0);
+}
+
+TEST_CASE("Undo and redo shortcuts send the Pro Tools commands without confirmation") {
+    Fixture fixture;
+    auto* undoAction = fixture.child<QAction>("undoAction");
+    auto* redoAction = fixture.child<QAction>("redoAction");
+    CHECK(undoAction->shortcut() == QKeySequence(QKeySequence::Undo));
+    CHECK(redoAction->shortcut() == QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Z));
+    CHECK_FALSE(undoAction->isEnabled());
+
+    bool asked = false;
+    fixture.window.setConfirmHandler([&](const CommandInfo&, bool&) {
+        asked = true;
+        return true;
+    });
+    fixture.connectSession();
+    REQUIRE(undoAction->isEnabled());
+    undoAction->trigger();
+    redoAction->trigger();
+    CHECK_FALSE(asked);
+
+    const auto sent = fixture.session.sent();
+    REQUIRE(sent.size() >= 2);
+    CHECK(sent[sent.size() - 2].commandId == undo);
+    CHECK(sent[sent.size() - 2].requestJson == R"({"levels":1})");
+    CHECK(sent.back().commandId == redo);
+    REQUIRE(QTest::qWaitFor([&] { return fixture.text("responseMeta").contains("CId_Redo"); }, waitMs));
 }
 
 TEST_CASE("Commands newer than the host are flagged") {

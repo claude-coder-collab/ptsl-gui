@@ -208,7 +208,7 @@ TEST_CASE("History lists requests newest first and shows selected responses") {
     fixture.child<QPushButton>("historyResend")->click();
     QTest::qWait(20);
     CHECK(fixture.sentCount(makeWidget) == 2);
-    CHECK(fixture.session.sent().back().requestJson == R"({"name":"one"})");
+    CHECK(fixture.session.sent().back().requestJson.starts_with(R"({"name":"one",)"));
     CHECK(list->topLevelItemCount() == 4);
 
     fixture.child<QPushButton>("historyClear")->click();
@@ -236,7 +236,7 @@ TEST_CASE("History exports and imports") {
     REQUIRE(other.window->importHistory(path).has_value());
     const auto& entries = other.window->history().entries();
     REQUIRE(entries.size() == 2);
-    CHECK(entries.back().requestJson == R"({"name":"exported"})");
+    CHECK(entries.back().requestJson.starts_with(R"({"name":"exported",)"));
     CHECK(other.child<QTreeWidget>("historyList")->topLevelItemCount() == 2);
 
     QFile bad(fixture.settings.directory.filePath("bad.json"));
