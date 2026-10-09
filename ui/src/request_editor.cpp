@@ -3,6 +3,8 @@
 #include "command_browser.hpp"
 #include "form_editor.hpp"
 
+#include <ptslgui/sequence.hpp>
+
 #include <QComboBox>
 #include <QFontDatabase>
 #include <QHBoxLayout>
@@ -252,6 +254,10 @@ bool RequestEditor::loadFormFromText() {
     if (form_ == nullptr || command_ == nullptr || !command_->requestType) {
         return true;
     }
+    if (hasPlaceholders(requestText())) {
+        showPlaceholderNote();
+        return false;
+    }
     const auto normalized = schema_.normalizeJson(*command_->requestType, requestText());
     if (!normalized) {
         showError(tr("Fix the JSON before switching to the form: %1").arg(QString::fromStdString(normalized.error())));
@@ -273,10 +279,19 @@ void RequestEditor::showError(const QString& message) {
     validation_->setText(message);
 }
 
+void RequestEditor::showPlaceholderNote() {
+    validation_->setStyleSheet({});
+    validation_->setText(tr("Contains {{placeholders}}: they are filled in when a sequence runs"));
+}
+
 void RequestEditor::validateNow() {
     validationTimer_->stop();
     if (command_ == nullptr) {
         validation_->clear();
+        return;
+    }
+    if (hasPlaceholders(requestText())) {
+        showPlaceholderNote();
         return;
     }
     const auto result = validator_(command_->id, requestText());

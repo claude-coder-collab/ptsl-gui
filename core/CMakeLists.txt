@@ -6,6 +6,7 @@ add_library(ptslgui_core
     src/protocol.cpp
     src/sample.cpp
     src/schema.cpp
+    src/sequence.cpp
     src/time_format.cpp
     src/version.cpp)
 add_library(ptslgui::core ALIAS ptslgui_core)

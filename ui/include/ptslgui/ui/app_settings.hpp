@@ -35,6 +35,10 @@ public:
     [[nodiscard]] QString lastCommand() const;
     void setLastCommand(const QString& commandName);
 
+    /// The sequence being edited (sequence JSON), restored at startup.
+    [[nodiscard]] std::optional<std::string> currentSequence() const;
+    void setCurrentSequence(const std::string& sequenceJson);
+
     [[nodiscard]] QByteArray windowGeometry() const;
     [[nodiscard]] QByteArray windowState() const;
     [[nodiscard]] QByteArray splitterState() const;

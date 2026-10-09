@@ -12,6 +12,7 @@ const char* const addressKey = "connection/address";
 const char* const launchKey = "connection/launchHost";
 const char* const requestsGroup = "lastRequests";
 const char* const lastCommandKey = "ui/lastCommand";
+const char* const sequenceKey = "sequence/current";
 const char* const geometryKey = "window/geometry";
 const char* const stateKey = "window/state";
 const char* const splitterKey = "window/splitter";
@@ -76,6 +77,18 @@ QString AppSettings::lastCommand() const {
 
 void AppSettings::setLastCommand(const QString& commandName) {
     settings_->setValue(lastCommandKey, commandName);
+}
+
+std::optional<std::string> AppSettings::currentSequence() const {
+    const QVariant value = settings_->value(sequenceKey);
+    if (!value.isValid()) {
+        return std::nullopt;
+    }
+    return value.toString().toStdString();
+}
+
+void AppSettings::setCurrentSequence(const std::string& sequenceJson) {
+    settings_->setValue(sequenceKey, QString::fromStdString(sequenceJson));
 }
 
 QByteArray AppSettings::windowGeometry() const {
