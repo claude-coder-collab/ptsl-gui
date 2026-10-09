@@ -207,7 +207,9 @@ void ResponseView::showEntry(const HistoryEntry& entry) {
     }
     errors_->setPlainText(lines.join('\n'));
     tabs_->setTabText(2, errors.empty() ? tr("Errors") : tr("Errors (%1)").arg(errors.size()));
-    if (!errors.empty() && entry.responseJson.empty()) {
+    if (entry.outcome == Outcome::Completed) {
+        tabs_->setCurrentIndex(0);
+    } else if (!errors.empty() && entry.responseJson.empty()) {
         tabs_->setCurrentIndex(2);
     }
 }

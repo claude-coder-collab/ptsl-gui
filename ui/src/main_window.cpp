@@ -29,6 +29,8 @@ namespace ptslgui::ui {
 namespace {
 
 constexpr int statusMessageMs = 8000;
+const char* const undoCommand = "CId_Undo";
+const char* const redoCommand = "CId_Redo";
 constexpr int historyDockHeight = 160;
 const char* const historyFilter = "History (*.json)";
 
@@ -148,6 +150,14 @@ void MainWindow::buildMenus() {
     QAction* quit = file->addAction(tr("Quit"), qApp, &QApplication::closeAllWindows);
     quit->setMenuRole(QAction::QuitRole);
     quit->setShortcut(QKeySequence::Quit);
+
+    QMenu* edit = menuBar()->addMenu(tr("&Edit"));
+    undoAction_ = edit->addAction(tr("Undo in Pro Tools"), this, [this] { sendUndoRedo(undoCommand); });
+    undoAction_->setObjectName("undoAction");
+    undoAction_->setShortcut(QKeySequence::Undo);
+    redoAction_ = edit->addAction(tr("Redo in Pro Tools"), this, [this] { sendUndoRedo(redoCommand); });
+    redoAction_->setObjectName("redoAction");
+    redoAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Z));
 
     QMenu* request = menuBar()->addMenu(tr("&Request"));
     request->addAction(tr("Send"), this, &MainWindow::sendCurrent);
@@ -297,6 +307,8 @@ void MainWindow::updateConnectionUi() {
     addressEdit_->setEnabled(!connected && !connecting_);
     launchCheck_->setEnabled(!connected && !connecting_);
     editor_->setSendEnabled(connected);
+    undoAction_->setEnabled(connected && catalog_.findByName(undoCommand) != nullptr);
+    redoAction_->setEnabled(connected && catalog_.findByName(redoCommand) != nullptr);
 
     QString text;
     if (connecting_) {
@@ -336,8 +348,14 @@ void MainWindow::sendCurrent() {
     }
 }
 
-bool MainWindow::send(const CommandInfo& command, const std::string& requestJson, bool fromEditor) {
-    if (settings_.confirmMutating() && command.isMutating()) {
+void MainWindow::sendUndoRedo(const char* commandName) {
+    if (const CommandInfo* command = catalog_.findByName(commandName)) {
+        send(*command, R"({"levels": 1})", false, false);
+    }
+}
+
+bool MainWindow::send(const CommandInfo& command, const std::string& requestJson, bool fromEditor, bool confirm) {
+    if (confirm && settings_.confirmMutating() && command.isMutating()) {
         bool dontAskAgain = false;
         if (!confirm_(command, dontAskAgain)) {
             statusBar()->showMessage(tr("%1 was not sent").arg(QString::fromStdString(command.displayName)),

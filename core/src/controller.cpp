@@ -32,7 +32,8 @@ RequestController::RequestController(const CommandCatalog& catalog, const ProtoS
 
 RequestController::~RequestController() = default;
 
-std::expected<std::string, std::string> RequestController::prepare(int commandId, std::string_view requestJson) const {
+std::expected<std::string, std::string> RequestController::prepare(int commandId, std::string_view requestJson,
+                                                                   JsonFormat format) const {
     const CommandInfo* command = catalog_.findById(commandId);
     if (command == nullptr) {
         return std::unexpected(std::format("unknown command id {}", commandId));
@@ -43,7 +44,7 @@ std::expected<std::string, std::string> RequestController::prepare(int commandId
         }
         return std::string{};
     }
-    return schema_.normalizeJson(*command->requestType, requestJson);
+    return schema_.normalizeJson(*command->requestType, requestJson, format);
 }
 
 std::expected<std::uint64_t, std::string> RequestController::send(int commandId, std::string_view requestJson,
@@ -51,7 +52,7 @@ std::expected<std::uint64_t, std::string> RequestController::send(int commandId,
     if (session_.state() != ConnectionState::Connected) {
         return std::unexpected("not connected");
     }
-    auto prepared = prepare(commandId, requestJson);
+    auto prepared = prepare(commandId, requestJson, JsonFormat{.pretty = false, .includeDefaults = true});
     if (!prepared) {
         return std::unexpected(prepared.error());
     }

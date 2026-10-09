@@ -62,6 +62,9 @@ TEST_CASE("Schema describes every field kind") {
     REQUIRE(colour.enumValues.size() == 3);
     CHECK(colour.enumValues[1].name == "WColour_Red");
     CHECK(colour.enumValues[1].number == 1);
+    CHECK(colour.enumValues[1].aliases == std::vector<std::string>{"Red"});
+    CHECK(colour.enumValues[1].comment == "A warm colour.");
+    CHECK(colour.enumValues[2].aliases.empty());
 
     const auto& geometry = field(*spec, "geometry");
     CHECK(geometry.kind == FieldKind::Message);
@@ -112,6 +115,31 @@ TEST_CASE("normalizeJson accepts json names, enum numbers and blank input") {
     CHECK(json::parse(schema.normalizeJson("ListWidgetsRequestBody", R"({"limit": 5})").value()) == json{{"limit", 5}});
     CHECK(json::parse(schema.normalizeJson("MakeWidgetRequestBody", R"({"colour": 1})").value()) ==
           json{{"colour", "WColour_Red"}});
+}
+
+TEST_CASE("Aliased enum values prefer the non-deprecated name") {
+    const auto& schema = test::fixtureSchema();
+    CHECK(json::parse(schema.normalizeJson("MakeWidgetRequestBody", R"({"colour": "Red"})").value()) ==
+          json{{"colour", "WColour_Red"}});
+
+    const auto geometry = schema.message("Geometry");
+    REQUIRE(geometry.has_value());
+    const auto& unit = field(*geometry, "unit");
+    REQUIRE(unit.enumValues.size() == 2);
+    CHECK(unit.enumValues[1].name == "Unit_Mm");
+    CHECK(unit.enumValues[1].aliases == std::vector<std::string>{"Mm"});
+    CHECK(unit.enumValues[1].comment == "Millimetres.");
+    CHECK(json::parse(schema.normalizeJson("Geometry", R"({"unit": "Mm"})").value()) == json{{"unit", "Unit_Mm"}});
+}
+
+TEST_CASE("normalizeJson can include default values") {
+    const auto result = test::fixtureSchema().normalizeJson("MakeWidgetRequestBody", R"({"name": "w"})",
+                                                            JsonFormat{.pretty = false, .includeDefaults = true});
+    REQUIRE(result.has_value());
+    CHECK(json::parse(*result) == json::parse(R"({
+        "name": "w", "size": 0, "colour": "WColour_None", "visible": false, "tags": [], "parts": [],
+        "attributes": {}, "payload": "", "count": 0
+    })"));
 }
 
 TEST_CASE("normalizeJson pretty prints") {

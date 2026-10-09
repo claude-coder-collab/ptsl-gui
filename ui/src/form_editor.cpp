@@ -6,6 +6,7 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QHash>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -75,7 +76,7 @@ QString fieldToolTip(const FieldSpec& field) {
 
 bool isPathField(const FieldSpec& field) {
     const QString name = QString::fromStdString(field.name).toLower();
-    return field.kind == FieldKind::String &&
+    return field.kind == FieldKind::String && !isTimeLocationField(field.name) &&
            (name.contains(QStringLiteral("path")) || name.contains(QStringLiteral("location")) ||
             name.contains(QStringLiteral("folder")) || name.contains(QStringLiteral("directory")));
 }
@@ -238,6 +239,30 @@ public:
     [[nodiscard]] FormJson json() const override { return line()->text().toStdString(); }
 
     [[nodiscard]] bool isDefault() const override { return line()->text().isEmpty(); }
+
+    void setTimeFormat(const std::optional<TimeFormat>& format) override {
+        timeFormat_ = format;
+        if (!checkConnected_) {
+            connect(line(), &QLineEdit::textChanged, this, [this] { checkTimeFormat(); });
+            checkConnected_ = true;
+        }
+        line()->setPlaceholderText(format ? QString::fromUtf8(format->placeholder) : QString());
+        line()->setToolTip(
+            format ? QObject::tr("Expected %1, e.g. %2")
+                         .arg(QString::fromUtf8(format->description), QString::fromUtf8(format->placeholder))
+                   : QString());
+        checkTimeFormat();
+    }
+
+private:
+    void checkTimeFormat() {
+        const bool mismatch = timeFormat_ && !matchesTimeFormat(*timeFormat_, line()->text().toStdString());
+        line()->setProperty("timeFormatMismatch", mismatch);
+        line()->setStyleSheet(mismatch ? QStringLiteral("QLineEdit { color: #d03030; }") : QString());
+    }
+
+    std::optional<TimeFormat> timeFormat_;
+    bool checkConnected_ = false;
 };
 
 class EnumEditor final : public FieldEditor {
@@ -249,6 +274,13 @@ public:
             const QString name = QString::fromStdString(value.name);
             combo_->addItem(value.number == 0 ? QObject::tr("%1 (default)").arg(name) : name, value.number);
             combo_->setItemData(combo_->count() - 1, name, Qt::UserRole + 1);
+            if (!value.comment.empty()) {
+                combo_->setItemData(combo_->count() - 1, QString::fromStdString(value.comment), Qt::ToolTipRole);
+            }
+            numbers_.insert(name, value.number);
+            for (const auto& alias : value.aliases) {
+                numbers_.insert(QString::fromStdString(alias), value.number);
+            }
         }
         reset();
         connect(combo_, &QComboBox::currentIndexChanged, this, &FieldEditor::changed);
@@ -257,7 +289,8 @@ public:
     void setJson(const FormJson& value) override {
         int index = -1;
         if (value.is_string()) {
-            index = combo_->findData(QString::fromStdString(value.get<std::string>()), Qt::UserRole + 1);
+            const auto number = numbers_.constFind(QString::fromStdString(value.get<std::string>()));
+            index = number == numbers_.cend() ? -1 : combo_->findData(*number);
         } else if (value.is_number_integer()) {
             index = combo_->findData(value.get<int>());
         }
@@ -283,6 +316,7 @@ public:
 
 private:
     QComboBox* combo_;
+    QHash<QString, int> numbers_;
 };
 
 QToolButton* removeButton(QWidget* parent) {
@@ -446,6 +480,33 @@ MessageEditor::MessageEditor(const ProtoSchema& schema, const std::string& messa
     }
     if (spec_.fields.empty()) {
         layout->addRow(new QLabel(tr("<i>No fields</i>"), this));
+    }
+    connectTimeUnit();
+}
+
+void MessageEditor::connectTimeUnit() {
+    for (const auto& row : rows_) {
+        if (row.field->kind != FieldKind::Enum || row.field->repeated || !isTimeUnitEnum(row.field->typeName)) {
+            continue;
+        }
+        if (timeUnit_ == nullptr || shortTypeName(row.field->typeName) == QStringLiteral("TimelineLocationType")) {
+            timeUnit_ = &row;
+        }
+    }
+    if (timeUnit_ == nullptr) {
+        return;
+    }
+    connect(timeUnit_->editor, &FieldEditor::changed, this, &MessageEditor::updateTimeFormats);
+    updateTimeFormats();
+}
+
+void MessageEditor::updateTimeFormats() {
+    const FormJson unit = timeUnit_->editor->json();
+    const auto format = unit.is_string() ? timeFormatFor(unit.get<std::string>()) : std::nullopt;
+    for (const auto& row : rows_) {
+        if (row.field->kind == FieldKind::String && !row.field->repeated && isTimeLocationField(row.field->name)) {
+            row.editor->setTimeFormat(format);
+        }
     }
 }
 

@@ -25,6 +25,7 @@ add_executable(ptslgui_core_tests
     core/test_protocol.cpp
     core/test_sample.cpp
     core/test_schema.cpp
+    core/test_time_format.cpp
     core/test_sdk_proto.cpp
     core/test_version.cpp)
 add_dependencies(ptslgui_core_tests ptslgui_test_data)

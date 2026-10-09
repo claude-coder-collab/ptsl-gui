@@ -35,8 +35,17 @@ def test_display_name(enum_name: str, expected: str) -> None:
 
 
 def test_only_cid_entries_become_commands(commands: dict[str, gen_catalog.Command]) -> None:
-    assert list(commands) == ["CId_MakeWidget", "CId_ListWidgets", "CId_Ping", "CId_DeleteWidget", "CId_GetPTSLVersion"]
-    assert [command.id for command in commands.values()] == [0, 1, 2, 3, 4]
+    assert list(commands) == [
+        "CId_MakeWidget",
+        "CId_ListWidgets",
+        "CId_Ping",
+        "CId_DeleteWidget",
+        "CId_GetPTSLVersion",
+        "CId_Undo",
+        "CId_Redo",
+        "CId_SetSelection",
+    ]
+    assert [command.id for command in commands.values()] == [0, 1, 2, 3, 4, 5, 6, 8]
 
 
 def test_aliases_attach_to_command(commands: dict[str, gen_catalog.Command]) -> None:

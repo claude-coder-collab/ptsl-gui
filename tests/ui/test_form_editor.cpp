@@ -16,6 +16,7 @@
 #include <QPushButton>
 #include <QTabWidget>
 #include <QTest>
+#include <QToolButton>
 #include <catch2/catch_test_macros.hpp>
 
 #include <set>
@@ -201,6 +202,52 @@ TEST_CASE("Field tooltips describe type and comment") {
     CHECK(find<FieldEditor>(editor, "field_tags")->toolTip().startsWith("tags (repeated string)"));
     CHECK(mapKeyString(FormJson(true)) == "true");
     CHECK(mapKeyString(FormJson(5)) == "5");
+}
+
+TEST_CASE("Enum combos show one entry per value and accept aliases") {
+    MessageEditor editor(test::fixtureSchema(), "MakeWidgetRequestBody");
+    const auto* combo = find<QComboBox>(*find<FieldEditor>(editor, "field_colour"), {});
+    REQUIRE(combo->count() == 3);
+    CHECK(combo->itemText(1) == "WColour_Red");
+    CHECK(combo->itemData(1, Qt::ToolTipRole).toString() == "A warm colour.");
+
+    editor.setJson(FormJson::parse(R"({"colour": "Red"})"));
+    CHECK(combo->currentIndex() == 1);
+    CHECK(editor.json() == FormJson::parse(R"({"colour": "WColour_Red"})"));
+}
+
+TEST_CASE("Time fields show the format of the selected location type") {
+    MessageEditor editor(test::fixtureSchema(), "SetSelectionRequestBody");
+    QLineEdit* inTime = lineIn(editor, "in_time");
+    CHECK(inTime->placeholderText().isEmpty());
+    CHECK(find<FieldEditor>(editor, "field_in_time")->findChild<QToolButton*>("browseButton") == nullptr);
+    CHECK(find<FieldEditor>(editor, "field_session_location")->findChild<QToolButton*>("browseButton") != nullptr);
+
+    editor.setJson(FormJson::parse(R"({"location_type": "TLType_MinSecs"})"));
+    CHECK(inTime->placeholderText() == "0:00.000");
+    CHECK(lineIn(editor, "out_time")->placeholderText() == "0:00.000");
+    CHECK(lineIn(editor, "session_location")->placeholderText().isEmpty());
+    CHECK(inTime->toolTip().contains("M:SS.mmm"));
+
+    inTime->setText("1:5");
+    CHECK(inTime->property("timeFormatMismatch").toBool());
+    inTime->setText("1:05.250");
+    CHECK_FALSE(inTime->property("timeFormatMismatch").toBool());
+
+    editor.setJson(FormJson::parse(R"({"in_time": "1|1|000", "location_type": "TLType_BarsBeats"})"));
+    CHECK(inTime->placeholderText() == "1|1|000");
+    CHECK_FALSE(inTime->property("timeFormatMismatch").toBool());
+
+    editor.reset();
+    CHECK(inTime->placeholderText().isEmpty());
+    CHECK_FALSE(inTime->property("timeFormatMismatch").toBool());
+}
+
+TEST_CASE("Nested time locations follow their own time type") {
+    MessageEditor editor(test::fixtureSchema(), "TimelineLocation");
+    CHECK(editor.findChild<QToolButton*>("browseButton") == nullptr);
+    editor.setJson(FormJson::parse(R"({"time_type": "TLType_TimeCode"})"));
+    CHECK(lineIn(editor, "location")->placeholderText() == "00:00:00:00");
 }
 
 TEST_CASE("Request editor keeps form and JSON in sync") {

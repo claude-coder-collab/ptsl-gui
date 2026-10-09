@@ -33,9 +33,12 @@ public:
     ~RequestController();
 
     /// Returns the normalised request JSON for a command, or a validation error.
-    [[nodiscard]] std::expected<std::string, std::string> prepare(int commandId, std::string_view requestJson) const;
+    [[nodiscard]] std::expected<std::string, std::string> prepare(int commandId, std::string_view requestJson,
+                                                                  JsonFormat format = {}) const;
 
     /// Validates and sends; returns the history sequence number. onUpdate is called for each response.
+    /// The body sent (and recorded) includes fields at their default values, because Pro Tools rejects
+    /// requests that omit them.
     std::expected<std::uint64_t, std::string> send(int commandId, std::string_view requestJson,
                                                    EntryCallback onUpdate = {});
 
