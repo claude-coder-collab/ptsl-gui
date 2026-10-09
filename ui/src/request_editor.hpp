@@ -44,6 +44,7 @@ signals:
 
 private:
     void validateNow();
+    void showPlaceholderNote();
     void loadSelectedExample();
     void onFormChanged();
     void onTabChanged(int index);

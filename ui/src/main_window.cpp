@@ -3,6 +3,7 @@
 #include "preferences_dialog.hpp"
 #include "request_editor.hpp"
 #include "response_view.hpp"
+#include "sequence_panel.hpp"
 
 #include <ptslgui/protocol.hpp>
 #include <ptslgui/ui/main_window.hpp>
@@ -33,6 +34,7 @@ const char* const undoCommand = "CId_Undo";
 const char* const redoCommand = "CId_Redo";
 constexpr int historyDockHeight = 160;
 const char* const historyFilter = "History (*.json)";
+const char* const sequenceFilter = "Sequence (*.json)";
 
 } // namespace
 
@@ -48,14 +50,23 @@ MainWindow::MainWindow(const CommandCatalog& catalog, const ProtoSchema& schema,
                                                           QMetaObject::invokeMethod(this, std::move(task),
                                                                                     Qt::QueuedConnection);
                                                       }))
+    , runner_(std::make_unique<SequenceRunner>(catalog_, *controller_,
+                                               [this](std::function<void()> task) {
+                                                   QMetaObject::invokeMethod(this, std::move(task),
+                                                                             Qt::QueuedConnection);
+                                               }))
     , confirm_(
           [this](const CommandInfo& command, bool& dontAskAgain) { return confirmWithDialog(command, dontAskAgain); })
+    , confirmSequence_([this](const QStringList& commandNames, bool& dontAskAgain) {
+        return confirmSequenceWithDialog(commandNames, dontAskAgain);
+    })
     , browser_(new CommandBrowser(catalog_, this))
     , editor_(new RequestEditor(
           schema_, [this](int commandId, std::string_view json) { return controller_->prepare(commandId, json); },
           this))
     , responseView_(new ResponseView(this))
     , historyPanel_(new HistoryPanel(this))
+    , sequencePanel_(new SequencePanel(catalog_, this))
     , splitter_(new QSplitter(Qt::Horizontal, this)) {
     setWindowTitle(tr("PTSL GUI"));
     setObjectName("mainWindow");
@@ -73,6 +84,12 @@ MainWindow::MainWindow(const CommandCatalog& catalog, const ProtoSchema& schema,
     historyDock->setObjectName("historyDock");
     historyDock->setWidget(historyPanel_);
     addDockWidget(Qt::BottomDockWidgetArea, historyDock);
+    auto* sequenceDock = new QDockWidget(tr("Sequence"), this);
+    sequenceDock->setObjectName("sequenceDock");
+    sequenceDock->setWidget(sequencePanel_);
+    addDockWidget(Qt::BottomDockWidgetArea, sequenceDock);
+    tabifyDockWidget(historyDock, sequenceDock);
+    historyDock->raise();
     resizeDocks({historyDock}, {historyDockHeight}, Qt::Vertical);
 
     buildToolbar();
@@ -88,6 +105,22 @@ MainWindow::MainWindow(const CommandCatalog& catalog, const ProtoSchema& schema,
     connect(historyPanel_, &HistoryPanel::exportRequested, this, &MainWindow::chooseExportPath);
     connect(historyPanel_, &HistoryPanel::importRequested, this, &MainWindow::chooseImportPath);
     connect(historyPanel_, &HistoryPanel::clearRequested, this, &MainWindow::clearHistory);
+    connect(sequencePanel_, &SequencePanel::addRequested, this, &MainWindow::addSequenceStep);
+    connect(sequencePanel_, &SequencePanel::updateRequested, this, &MainWindow::updateSequenceStep);
+    connect(sequencePanel_, &SequencePanel::loadRequested, this, &MainWindow::loadSequenceStep);
+    connect(sequencePanel_, &SequencePanel::runRequested, this, &MainWindow::runSequence);
+    connect(sequencePanel_, &SequencePanel::stopRequested, this, [this] {
+        runner_->stop();
+        statusBar()->showMessage(tr("Stopping the sequence after the current step…"), statusMessageMs);
+    });
+    connect(sequencePanel_, &SequencePanel::newRequested, this, [this] {
+        sequencePanel_->setSequence({});
+        settings_.setCurrentSequence(sequenceToJson(sequencePanel_->sequence()));
+    });
+    connect(sequencePanel_, &SequencePanel::openRequested, this, &MainWindow::chooseSequenceOpenPath);
+    connect(sequencePanel_, &SequencePanel::saveRequested, this, &MainWindow::chooseSequenceSavePath);
+    connect(sequencePanel_, &SequencePanel::changed, this,
+            [this] { settings_.setCurrentSequence(sequenceToJson(sequencePanel_->sequence())); });
 
     resize(1400, 900);
     restoreSettings();
@@ -107,6 +140,10 @@ bool MainWindow::selectCommand(int commandId) {
 
 void MainWindow::setConfirmHandler(ConfirmHandler handler) {
     confirm_ = std::move(handler);
+}
+
+void MainWindow::setSequenceConfirmHandler(SequenceConfirmHandler handler) {
+    confirmSequence_ = std::move(handler);
 }
 
 void MainWindow::buildToolbar() {
@@ -174,6 +211,7 @@ void MainWindow::buildMenus() {
 
     QMenu* view = menuBar()->addMenu(tr("&View"));
     view->addAction(findChild<QDockWidget*>("historyDock")->toggleViewAction());
+    view->addAction(findChild<QDockWidget*>("sequenceDock")->toggleViewAction());
 
     QMenu* help = menuBar()->addMenu(tr("&Help"));
     QAction* about = help->addAction(tr("About PTSL GUI"), this, [this] {
@@ -198,6 +236,11 @@ void MainWindow::restoreSettings() {
     }
     if (const CommandInfo* command = catalog_.findByName(settings_.lastCommand().toStdString())) {
         selectCommand(command->id);
+    }
+    if (const auto saved = settings_.currentSequence()) {
+        if (auto sequence = sequenceFromJson(*saved)) {
+            sequencePanel_->setSequence(std::move(*sequence));
+        }
     }
 }
 
@@ -232,6 +275,25 @@ bool MainWindow::confirmWithDialog(const CommandInfo& command, bool& dontAskAgai
     const bool accepted = box.exec() == QMessageBox::Yes;
     dontAskAgain = accepted && dontAsk->isChecked();
     return accepted;
+}
+
+bool MainWindow::confirmSequenceWithDialog(const QStringList& commandNames, bool& dontAskAgain) {
+    QMessageBox box(QMessageBox::Question, tr("Modify the session?"),
+                    tr("This sequence modifies the Pro Tools session with: %1.").arg(commandNames.join(tr(", "))),
+                    QMessageBox::Yes | QMessageBox::Cancel, this);
+    box.setInformativeText(tr("Run it?"));
+    box.button(QMessageBox::Yes)->setText(tr("Run"));
+    box.setDefaultButton(QMessageBox::Yes);
+    auto* dontAsk = new QCheckBox(tr("Don't ask again"), &box);
+    box.setCheckBox(dontAsk);
+    const bool accepted = box.exec() == QMessageBox::Yes;
+    dontAskAgain = accepted && dontAsk->isChecked();
+    return accepted;
+}
+
+void MainWindow::turnOffConfirmations() {
+    settings_.setConfirmMutating(false);
+    confirmAction_->setChecked(false);
 }
 
 void MainWindow::toggleConnection() {
@@ -307,6 +369,7 @@ void MainWindow::updateConnectionUi() {
     addressEdit_->setEnabled(!connected && !connecting_);
     launchCheck_->setEnabled(!connected && !connecting_);
     editor_->setSendEnabled(connected);
+    sequencePanel_->setRunState(runner_->running(), connected);
     undoAction_->setEnabled(connected && catalog_.findByName(undoCommand) != nullptr);
     redoAction_->setEnabled(connected && catalog_.findByName(redoCommand) != nullptr);
 
@@ -363,8 +426,7 @@ bool MainWindow::send(const CommandInfo& command, const std::string& requestJson
             return false;
         }
         if (dontAskAgain) {
-            settings_.setConfirmMutating(false);
-            confirmAction_->setChecked(false);
+            turnOffConfirmations();
         }
     }
     if (hostVersion_ && command.since && command.isUnsupportedBy(*hostVersion_)) {
@@ -501,6 +563,175 @@ void MainWindow::formatCurrent() {
     } else {
         editor_->showError(QString::fromStdString(formatted.error()));
     }
+}
+
+void MainWindow::addSequenceStep() {
+    if (current_ == nullptr) {
+        statusBar()->showMessage(tr("Select a command to add to the sequence"), statusMessageMs);
+        return;
+    }
+    sequencePanel_->addStep(*current_, current_->requestType ? editor_->requestText() : std::string{});
+}
+
+void MainWindow::updateSequenceStep(std::size_t index) {
+    if (current_ == nullptr) {
+        return;
+    }
+    sequencePanel_->updateStep(index, *current_, current_->requestType ? editor_->requestText() : std::string{});
+}
+
+void MainWindow::loadSequenceStep(std::size_t index) {
+    const auto& steps = sequencePanel_->sequence().steps;
+    if (index >= steps.size()) {
+        return;
+    }
+    const SequenceStep step = steps[index];
+    const CommandInfo* command = catalog_.findByName(step.commandName);
+    if (command == nullptr || !selectCommand(command->id)) {
+        statusBar()->showMessage(tr("Unknown command %1").arg(QString::fromStdString(step.commandName)),
+                                 statusMessageMs);
+        return;
+    }
+    if (command->requestType) {
+        editor_->setRequestText(step.requestTemplate.empty() ? std::string("{}") : step.requestTemplate);
+    }
+}
+
+bool MainWindow::sequenceRunning() const {
+    return runner_->running();
+}
+
+bool MainWindow::runSequence() {
+    if (runner_->running()) {
+        return false;
+    }
+    if (session_.state() != ConnectionState::Connected) {
+        statusBar()->showMessage(tr("Connect to Pro Tools to run the sequence"), statusMessageMs);
+        return false;
+    }
+    const Sequence& sequence = sequencePanel_->sequence();
+    if (settings_.confirmMutating()) {
+        QStringList mutating;
+        for (const auto& step : sequence.steps) {
+            const CommandInfo* command = catalog_.findByName(step.commandName);
+            if (step.enabled && command != nullptr && command->isMutating()) {
+                const QString name = QString::fromStdString(command->displayName);
+                if (!mutating.contains(name)) {
+                    mutating << name;
+                }
+            }
+        }
+        if (!mutating.isEmpty()) {
+            bool dontAskAgain = false;
+            if (!confirmSequence_(mutating, dontAskAgain)) {
+                statusBar()->showMessage(tr("The sequence was not run"), statusMessageMs);
+                return false;
+            }
+            if (dontAskAgain) {
+                turnOffConfirmations();
+            }
+        }
+    }
+    sequencePanel_->clearResults();
+    const bool started = runner_->start(
+        sequence,
+        [this](std::size_t index, const StepResult& result, const HistoryEntry*) { onSequenceStep(result, index); },
+        [this](SequenceOutcome outcome) { onSequenceFinished(outcome); });
+    if (started) {
+        sequencePanel_->setRunState(true, true);
+        statusBar()->showMessage(tr("Running the sequence…"));
+    }
+    return started;
+}
+
+void MainWindow::onSequenceStep(const StepResult& result, std::size_t index) {
+    sequencePanel_->setStepResult(index, result);
+    if (!result.historySequence) {
+        return;
+    }
+    const HistoryEntry* entry = history_.find(*result.historySequence);
+    if (entry == nullptr) {
+        return;
+    }
+    historyPanel_->updateEntry(*entry);
+    if (displayedSequence_ != entry->sequence) {
+        displayedSequence_ = entry->sequence;
+        historyPanel_->select(entry->sequence);
+    }
+    responseView_->showEntry(*entry);
+    emit responseUpdated(entry->sequence);
+}
+
+void MainWindow::onSequenceFinished(SequenceOutcome outcome) {
+    sequencePanel_->setRunState(false, session_.state() == ConnectionState::Connected);
+    QString message;
+    switch (outcome) {
+    case SequenceOutcome::Completed:
+        message = tr("Sequence completed");
+        break;
+    case SequenceOutcome::Failed:
+        message = tr("Sequence stopped at a failed step");
+        break;
+    case SequenceOutcome::Stopped:
+        message = tr("Sequence stopped");
+        break;
+    }
+    statusBar()->showMessage(message, statusMessageMs);
+    emit sequenceFinished();
+}
+
+std::expected<void, std::string> MainWindow::saveSequence(const QString& path) const {
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return std::unexpected(file.errorString().toStdString());
+    }
+    const QByteArray data = QByteArray::fromStdString(sequenceToJson(sequencePanel_->sequence()));
+    if (file.write(data) != data.size() || !file.commit()) {
+        return std::unexpected(file.errorString().toStdString());
+    }
+    return {};
+}
+
+std::expected<void, std::string> MainWindow::openSequence(const QString& path) {
+    if (runner_->running()) {
+        return std::unexpected("a sequence is running");
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return std::unexpected(file.errorString().toStdString());
+    }
+    auto sequence = sequenceFromJson(file.readAll().toStdString());
+    if (!sequence) {
+        return std::unexpected(sequence.error());
+    }
+    sequencePanel_->setSequence(std::move(*sequence));
+    settings_.setCurrentSequence(sequenceToJson(sequencePanel_->sequence()));
+    return {};
+}
+
+void MainWindow::chooseSequenceSavePath() {
+    const QString suggested = sequencePanel_->sequence().name.empty()
+                                  ? QStringLiteral("sequence.json")
+                                  : QString::fromStdString(sequencePanel_->sequence().name) + QStringLiteral(".json");
+    const QString path = QFileDialog::getSaveFileName(this, tr("Save Sequence"), suggested, tr(sequenceFilter));
+    if (path.isEmpty()) {
+        return;
+    }
+    const auto result = saveSequence(path);
+    statusBar()->showMessage(result ? tr("Sequence saved to %1").arg(path)
+                                    : tr("Save failed: %1").arg(QString::fromStdString(result.error())),
+                             statusMessageMs);
+}
+
+void MainWindow::chooseSequenceOpenPath() {
+    const QString path = QFileDialog::getOpenFileName(this, tr("Open Sequence"), QString(), tr(sequenceFilter));
+    if (path.isEmpty()) {
+        return;
+    }
+    const auto result = openSequence(path);
+    statusBar()->showMessage(result ? tr("Sequence opened from %1").arg(path)
+                                    : tr("Open failed: %1").arg(QString::fromStdString(result.error())),
+                             statusMessageMs);
 }
 
 } // namespace ptslgui::ui

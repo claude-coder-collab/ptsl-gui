@@ -6,8 +6,8 @@ A C++ desktop application that wraps every command in the Avid PTSL (Pro Tools S
 
 ## Non-goals
 
-- Not a Pro Tools replacement or a mixing/editing UI. One command at a time, plus history/replay.
-- No command sequences, scripting or macro recorder in v1 (planned for v2, see Future).
+- Not a Pro Tools replacement or a mixing/editing UI. One command at a time, history/replay, and simple linear request sequences (milestone 7).
+- No scripting language, loops/conditions or macro recorder.
 - Only the latest PTSL protocol (the `PTSL.proto` shipped with the newest SDK) is targeted. Older protocol snapshots are ignored.
 - No hand-written UI per command. Forms are generated from the protocol definition, so new SDK versions need no UI code changes.
 
@@ -48,13 +48,15 @@ PTSL.proto ───────────────────────
 │  ├ CommandBrowser   (catalog view)   │
 │  ├ RequestEditor    (form ⇄ JSON)    │
 │  ├ ResponseView     (tree + raw)     │
-│  └ HistoryPanel                      │
+│  ├ HistoryPanel                      │
+│  └ SequencePanel                     │
 └──────────────┬───────────────────────┘
                │ GUI thread only
 ┌──────────────▼───────────────────────┐
 │ ptslgui_core (no Qt)                 │
 │  CommandCatalog   ProtoSchema        │
 │  RequestController  History  Version │
+│  Sequence  SequenceRunner            │
 │  IPtslSession ◄── FakePtslSession    │
 └──────────────▲───────────────────────┘
                │
@@ -89,6 +91,7 @@ Namespace `ptslgui`. Errors are returned as `std::expected<T, std::string>`; no 
 - `protocol.hpp` — SDK-independent protocol knowledge: command names `CId_HostReadyCheck`, `CId_RegisterConnection`, `CId_GetPTSLVersion`; `statusFromTaskStatus(int)` (TStatus Queued/Pending/InProgress/WaitingForUserInput → InProgress; Completed/CompletedWithBadResponse → Completed; anything else, including the SDK's NoResponseReceived −1 → Failed); `versionFromResponse` (GetPTSLVersion body `version`/`version_minor`/`version_revision`); `hostReadyFromResponse` (`is_host_ready`, missing = false); `registerConnectionBody(company, application)`; `errorsFromJson` (accepts `{"errors":[{command_error_type, command_error_message, is_warning}]}`, a single error object, `{"message": …}`, or arbitrary text as one error).
 - `sample.hpp` — `sampleJson(schema, message, SampleOptions{seed, maxDepth = 3, maxElements = 3})`: deterministic random JSON that `normalizeJson` accepts, covering every field kind (int64/uint64 as strings, floats as multiples of 0.25, bytes as base64, enums by name, Unicode/escaped strings), oneofs (one member at most), optional presence, repeated fields and maps; nested messages beyond `maxDepth` are left out; unknown types give `{}`. Used for round-trip tests.
 - `time_format.hpp` — `TimeFormat{unit, placeholder, description, pattern}` for the PTSL time units (unit enum value suffix after the first `_`): Samples/Ticks/Frames (integers), MinSecs `M:SS[.mmm]` (placeholder `0:00.000`), TimeCode `HH:MM:SS:FF` (`;` allowed before frames, optional `.sub`), BarsBeats `BARS|BEATS[|TICKS]` (`1|1|000`), FeetFrames `FEET+FRAMES` (`0+00`), Seconds (decimal); all allow a leading `-`. `timeFormatFor(enumValueName)`, `isTimeUnitEnum(typeName)` (`TimelineLocationType`, `TrackOffsetOptions`), `isTimeLocationField(fieldName)` (`location`, `location_value`, `*_time`), `matchesTimeFormat(format, text)` (trimmed; empty matches).
+- `sequence.hpp` — request sequences (see Sequences below).
 - `controller.hpp` — `RequestController(catalog, schema, session, history, Dispatcher, Clock)`. `prepare(commandId, json, JsonFormat = {})`: commands with a request type are normalised against it; commands without one accept only blank or `{}` and send an empty body. `send(...)` refuses when disconnected or invalid (nothing recorded), otherwise normalises with `includeDefaults` (see SDK facts), records that body in history and sends it. The editor keeps the compact form (defaults omitted). Session callbacks are re-posted through the `Dispatcher` (Qt: queued invoke onto the GUI thread; default: inline), so history and callbacks are only touched on the owning thread. Responses arriving after the controller is destroyed are ignored.
 
 ### Command catalog (build time)
@@ -158,6 +161,30 @@ SDK behaviour it relies on: the client constructor launches Pro Tools if asked (
 - Sending a command newer than the connected host shows a status-bar warning but still sends. The response view shows the most recently sent request, or the entry selected in History.
 - **History dock** (`historyDock`, bottom, 160 px initially; `HistoryPanel`): list `historyList` (columns #, Time HH:mm:ss with ISO tooltip, Command without `CId_`, Outcome with "In progress N%", Duration ms), newest first, including the automatic GetPTSLVersion. Selecting an entry shows its response. Load (`historyLoad`, or double-click) selects the command and puts the pretty-printed request in the editor. Resend (`historyResend`) sends the stored request again (confirmation rules apply). Import… / Export… (`historyImport` / `historyExport`) use the `History` JSON format via file dialogs (`MainWindow::importHistory` / `exportHistory(path)`; export writes atomically with `QSaveFile`; a failed import leaves the history unchanged). Clear (`historyClear`) empties history and the response view.
 
+### Sequences
+
+A sequence is an ordered list of steps run one after another, where a step's request may use values from earlier steps' responses.
+
+**Model** (`core/include/ptslgui/sequence.hpp`): `Sequence{name, variables: vector<pair<name, value>>, steps}`, `SequenceStep{label, commandName (CId_*), requestTemplate (text, may contain placeholders, empty for commands without a body), enabled = true, continueOnError = false}`. Labels and variable names: `isValidLabel` = `[A-Za-z_][A-Za-z0-9_]*`, not `vars`; step labels are unique. `uniqueStepLabel(sequence, base)` replaces invalid characters with `_`, prefixes `step_` if needed, and appends `_2`, `_3`, … when taken.
+
+**File format** (`sequenceToJson` / `sequenceFromJson`), pretty-printed:
+
+```json
+{"version": 1, "name": "Setup", "variables": {"size": "7"},
+ "steps": [{"label": "tracks", "command": "CId_GetTrackList", "request": "{…}", "enabled": true, "continue_on_error": false}]}
+```
+
+`version` must be 1; `steps` required; `label`, `command`, `request` required strings; `enabled` (default true) and `continue_on_error` (default false) optional; variables are an object of strings with valid names (order kept); invalid or duplicate labels are errors.
+
+**Placeholders** (`substitute(template, SubstitutionContext{responses: label → response JSON, variables})`, `hasPlaceholders`): `{{label.path}}` reads a completed earlier step's response; `{{vars.name}}` a variable (parsed as JSON if it is valid JSON, else a string; a path may follow). A path is a chain of `.field` and `[index]`; whitespace inside the braces is ignored; an empty response counts as `{}`. A placeholder that is a bare JSON value or the entire content of a string literal (`"{{x}}"`) is replaced by the JSON value itself (type kept, e.g. a number or object). Inside a longer string literal the value is inserted as text (strings without quotes, other values as compact JSON), JSON-escaped. String-literal tracking respects `\` escapes. Errors name the placeholder: unknown step (only earlier, completed steps can be used), missing field, index out of range, non-numeric index, unknown variable, unterminated `{{`.
+
+**Runner** (`SequenceRunner(catalog, controller, Dispatcher)`): `start(sequence, onStep, onFinished)` (false if already running), `stop()`, `running()`. Steps run in order through `RequestController::send` (so they are validated, sent with defaults included and recorded in History). Each step: disabled → Skipped; unknown command, substitution error or validation error → Failed with `error`; otherwise reported Running (again with its `historySequence` once sent), then Running per progress update, then Completed (response stored under its label), Failed or Cancelled. A Failed step ends the run (`SequenceOutcome::Failed`) unless `continueOnError`; a Cancelled step (e.g. Cancel all, disconnect) ends it as Stopped; `stop()` ends it as Stopped after the running step's final response. Next steps are posted through the dispatcher (no recursion); callbacks after destruction or from an earlier run are ignored.
+
+**Sequence dock** (`sequenceDock`, tabbed with History, History raised initially; in the View menu; `SequencePanel`, `sequencePanel`): name field (`sequenceName`, placeholder "Untitled sequence"), New (`sequenceNew`), Open… (`sequenceOpen`), Save… (`sequenceSave`), Run (`sequenceRun`, enabled when connected and there are steps) / Stop (`sequenceStop`, shown while running). Steps tree (`sequenceSteps`, columns #, Label, Command, Continue on Error, Status): # is a checkbox for `enabled`; the label is editable by double-click (invalid or duplicate names revert); Continue on Error is a checkbox; the command tooltip shows the enum name and request; Status shows Skipped / Running… / Completed / Failed / Cancelled, plus `: <error>` for errors. Buttons: Add Current Request (`sequenceAdd`: the selected command and the editor's JSON text as is, label from the command name without `CId_`), Update Step (`sequenceUpdate`: replace the selected step's command and request with the editor's), Load (`sequenceLoad`, or double-click outside the label: select the step's command and put its template in the editor), Up / Down / Remove (`sequenceUp`, `sequenceDown`, `sequenceRemove`). Variables table (`sequenceVariables`, Variable / Value; invalid names in red) with Add Variable (`variableAdd`, names `var1`, `var2`, …) and Remove Variable (`variableRemove`). A help line explains the placeholder syntax. Editing is disabled while running.
+- Running: requires a connection; if confirmations are on and enabled steps include session-modifying commands, one dialog lists them ("This sequence modifies the Pro Tools session with: …", Run / Cancel, "Don't ask again" turns the setting off). Replaceable via `MainWindow::setSequenceConfirmHandler(bool(const QStringList& names, bool& dontAskAgain))`. Each step's history entry is added to History, selected and shown in the response view as it runs. The status bar reports "Sequence completed" / "Sequence stopped at a failed step" / "Sequence stopped"; `MainWindow::sequenceFinished()` is emitted.
+- `MainWindow::saveSequence(path)` (atomic `QSaveFile`) / `openSequence(path)` (refused while running; a bad file leaves the current sequence) / `runSequence()` / `sequenceRunning()`. The current sequence is saved to the settings on every change (`sequence/current`) and restored at startup.
+- Request editor: while the JSON contains placeholders, validation shows "Contains {{placeholders}}: they are filled in when a sequence runs" instead of an error, and the Form tab is not loaded (it stays on JSON).
+
 ### Confirmations
 
 - Commands for which `CommandInfo::isMutating()` is true (session_file, session_write, editing, export categories — this includes Close Session) ask "<Command> modifies the Pro Tools session. Send it?" with Send / Cancel and a "Don't ask again" checkbox, before sending from the editor or resending from history. Cancel shows "<Command> was not sent" in the status bar.
@@ -175,6 +202,7 @@ SDK behaviour it relies on: the client constructor launches Pro Tools if asked (
 | `lastRequests/<CId_Name>` | last request JSON sent from the editor for that command | — |
 | `connection/address`, `connection/launchHost` | toolbar fields (saved on connect and on close) | `localhost:31416`, false |
 | `ui/lastCommand` | last selected command, reselected at startup | — |
+| `sequence/current` | the sequence in the Sequence panel (sequence JSON) | — |
 | `window/geometry`, `window/state`, `window/splitter` | layout (saved on close) | — |
 
 - Selecting a command restores its saved request when remembering is on and the saved JSON still validates; otherwise the editor starts at `{}`.
@@ -265,10 +293,11 @@ Because the schema is parsed at runtime (see Architecture), the GUI uses whateve
 - **Packaging** (`tests/tools/test_package_app.py`): otool `-L`/`-D`/`-l` parsing (including the highest minimum macOS across architectures and old-style `LC_VERSION_MIN_MACOSX`), version ordering, external-reference and missing-`@rpath` detection, Mach-O detection, `LSMinimumSystemVersion` reading. `tests/tools/test_build_sdk.py` covers reading Conan package folders and idempotent `global.conf` updates.
 - The full suite also runs in the `dist` build (`ctest --preset dist`, run by `package_app.py`), against Conan protobuf 6.33 and the official Qt.
 - **SDK** (`tests/sdk`, only when the framework is built): unreachable host gives a "not ready" error quickly; sending while disconnected fails; runtime schema and SDK client coexist in one process. No test needs Pro Tools.
+- **Sequences** (`tests/core/test_sequence.cpp`): file round-trip and invalid files, labels, placeholder detection, whole-value and in-string substitution, substitution errors, runner order/substitution, skipped steps, failure with and without continue-on-error, preparation failures, stop, cancel, reported history entry, destruction safety. `tests/ui/test_sequence_panel.cpp`: dock placement, adding/editing/moving/removing steps, labels, variables, loading a step with placeholders, a full run with substitution, a failing step, one confirmation with "don't ask again", save/open/restore.
 - Hidden test `[.screenshot]` renders the main window with the real catalog and a fake session to the PNG path in `PTSLGUI_SCREENSHOT` (for visual checks; `screencapture` is unavailable on this machine).
 - **Forms** (`tests/ui/test_form_editor.cpp`): round-trip of generated samples through `MessageEditor` for every fixture message (60 seeds) and every SDK request type (4 seeds, when the SDK is present); defaults omitted; integer validators; optional presence; oneof selection and loading; lazy nested messages; repeated add/remove; maps; tooltips; Form ⇄ JSON tab sync including invalid JSON blocking the switch.
 - Samples (`tests/core/test_sample.cpp`): valid for every fixture message (50 seeds) and every SDK message; deterministic; cover all fields; depth limit.
-- The `[.screenshot]` test accepts `PTSLGUI_SCREENSHOT_COMMAND` (catalog name, default GetTrackList) to choose the command shown.
+- The `[.screenshot]` test also accepts `PTSLGUI_SCREENSHOT_SEQUENCE` (adds the command twice to a sequence, runs it and shows the Sequence dock), and `PTSLGUI_SCREENSHOT_COMMAND` (catalog name, default GetTrackList) to choose the command shown.
 
 ## Repository and CI
 
@@ -284,13 +313,15 @@ Because the schema is parsed at runtime (see Architecture), the GUI uses whateve
 4. ~~Minimal UI: connect, command list, raw JSON editor, response view; SDK session.~~ Done.
 5. ~~Generated forms.~~ Done.
 6. ~~History, persistence, safety prompts (with a setting to turn them off), polish, packaging.~~ Done.
+7. ~~Request sequences: model and file format, placeholders, runner, Sequence dock.~~ Done.
+8. Batch job creator (see Future), building on sequences.
 
 ## Decisions
 
 - GUI toolkit: Qt 6 Widgets.
 - Licence: MIT.
 - Protocol: latest only.
-- Command sequences: v2.
+- Command sequences: linear steps with `{{…}}` placeholders (milestone 7); no conditions or loops.
 - Distribution: personal use, ad-hoc signing only.
 - Platform: macOS 13.3+, Apple Silicon (arm64) only.
 
@@ -304,7 +335,6 @@ None currently.
 
 ## Future
 
-- v2: request sequences / macros with variable substitution between steps.
 - Batch job creator (requested in feedback): build and run PTSL batch jobs — pick commands, fill their forms, send them as one job, with status and cancel. Protocol: `CId_CreateBatchJob` / `CId_GetBatchJobStatus` / `CId_CompleteBatchJob` / `CId_CancelBatchJob` (since 2025.06; SDK article `howto_batch_jobs`); commands inside a job carry `VersionedRequestHeader.batch_job_header`, set on the SDK request with `CppPTSLRequest::SetVersionedRequestHeaderJson`. Needs `IPtslSession::send` to accept an optional versioned header JSON.
 - Subscribing to PTSL events (`category_events`) with a live event log.
 - Export a request as C++/Python (`py-ptsl`) snippet.
@@ -321,3 +351,4 @@ None currently.
 - Milestone 6 done: history dock, preferences and persisted settings, confirmations for session-modifying commands with a user setting to turn them off, menus, copy button, form layout fixes, self-contained ad-hoc-signed bundle via `tools/package_app.py`; 87 tests pass in dev, ASan+UBSan and TSan; clang-tidy clean.
 - Feedback round 1 (tested against Pro Tools with PTSL 2026.4): requests are now sent with all non-presence fields (fixes CreateSession `is_cloud_project` and CloseSession `save_on_close` errors); deprecated enum aliases no longer appear as duplicate combo items; time location fields show the expected format for the selected location type; Completed responses switch to the Tree tab; Cmd+Z / Cmd+Shift+Z send Undo / Redo to Pro Tools; batch job creator added to Future. Doxygen `*` decoration removed from field tooltips.
 - macOS 13.3 support: `dist` preset (Conan dependencies, official Qt 6.11.3), SDK framework rebuilt for 13.3, `package_app.py` verifies every binary targets ≤ 13.3; the packaged app is 47 MB, loads no Homebrew libraries and starts in demo mode. Not run on an actual macOS 13 machine (only this macOS 27.2 host is available).
+- Milestone 7 done: request sequences (core model, file format, placeholders, runner; Sequence dock with run/stop, save/open and persistence); 122 tests pass in dev, ASan+UBSan and TSan; clang-tidy clean. Not yet run against Pro Tools.

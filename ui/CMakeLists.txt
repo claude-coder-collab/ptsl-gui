@@ -14,7 +14,9 @@ add_library(ptslgui_ui
     src/request_editor.cpp
     src/request_editor.hpp
     src/response_view.cpp
-    src/response_view.hpp)
+    src/response_view.hpp
+    src/sequence_panel.cpp
+    src/sequence_panel.hpp)
 add_library(ptslgui::ui ALIAS ptslgui_ui)
 
 set_target_properties(ptslgui_ui PROPERTIES AUTOMOC ON)

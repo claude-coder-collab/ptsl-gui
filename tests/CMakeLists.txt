@@ -25,6 +25,7 @@ add_executable(ptslgui_core_tests
     core/test_protocol.cpp
     core/test_sample.cpp
     core/test_schema.cpp
+    core/test_sequence.cpp
     core/test_time_format.cpp
     core/test_sdk_proto.cpp
     core/test_version.cpp)
@@ -36,7 +37,8 @@ ptslgui_configure_target(ptslgui_core_tests)
 catch_discover_tests(ptslgui_core_tests)
 
 if(TARGET ptslgui_ui)
-    add_executable(ptslgui_ui_tests ui/main.cpp ui/test_form_editor.cpp ui/test_history_settings.cpp ui/test_main_window.cpp)
+    add_executable(ptslgui_ui_tests ui/main.cpp ui/test_form_editor.cpp ui/test_history_settings.cpp ui/test_main_window.cpp
+        ui/test_sequence_panel.cpp)
     add_dependencies(ptslgui_ui_tests ptslgui_test_data)
     target_include_directories(ptslgui_ui_tests PRIVATE "${PROJECT_SOURCE_DIR}/ui/src")
     target_compile_definitions(ptslgui_ui_tests PRIVATE ${test_definitions})

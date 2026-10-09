@@ -4,11 +4,14 @@
 #include <ptslgui/controller.hpp>
 #include <ptslgui/history.hpp>
 #include <ptslgui/schema.hpp>
+#include <ptslgui/sequence.hpp>
 #include <ptslgui/session.hpp>
 #include <ptslgui/ui/app_settings.hpp>
 
 #include <QMainWindow>
+#include <QStringList>
 
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <functional>
@@ -29,6 +32,7 @@ class CommandBrowser;
 class HistoryPanel;
 class RequestEditor;
 class ResponseView;
+class SequencePanel;
 
 /// The main PTSL GUI window: command browser, request editor, response view and history.
 /// Object names of child widgets are stable and used by tests.
@@ -38,6 +42,8 @@ class MainWindow final : public QMainWindow {
 public:
     /// Asks whether a command that modifies the session may be sent; may set dontAskAgain.
     using ConfirmHandler = std::function<bool(const CommandInfo& command, bool& dontAskAgain)>;
+    /// Asks whether a sequence containing the named session-modifying commands may run; may set dontAskAgain.
+    using SequenceConfirmHandler = std::function<bool(const QStringList& commandNames, bool& dontAskAgain)>;
 
     MainWindow(const CommandCatalog& catalog, const ProtoSchema& schema, IPtslSession& session, QSettings& settings,
                QWidget* parent = nullptr);
@@ -56,9 +62,16 @@ public:
 
     /// Replaces the confirmation dialog (used by tests).
     void setConfirmHandler(ConfirmHandler handler);
+    void setSequenceConfirmHandler(SequenceConfirmHandler handler);
 
     std::expected<void, std::string> exportHistory(const QString& path) const;
     std::expected<void, std::string> importHistory(const QString& path);
+
+    std::expected<void, std::string> saveSequence(const QString& path) const;
+    std::expected<void, std::string> openSequence(const QString& path);
+    /// Runs the sequence in the Sequence panel (after confirmation if needed); returns false if it did not start.
+    bool runSequence();
+    [[nodiscard]] bool sequenceRunning() const;
 
     /// Writes window layout and connection fields to the settings.
     void saveSettings();
@@ -66,6 +79,7 @@ public:
 signals:
     void connectionChanged(bool connected);
     void responseUpdated(std::uint64_t sequence);
+    void sequenceFinished();
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -92,6 +106,15 @@ private:
     void showCommand(int commandId);
     void showPreferences();
     bool confirmWithDialog(const CommandInfo& command, bool& dontAskAgain);
+    bool confirmSequenceWithDialog(const QStringList& commandNames, bool& dontAskAgain);
+    void turnOffConfirmations();
+    void addSequenceStep();
+    void updateSequenceStep(std::size_t index);
+    void loadSequenceStep(std::size_t index);
+    void onSequenceStep(const StepResult& result, std::size_t index);
+    void onSequenceFinished(SequenceOutcome outcome);
+    void chooseSequenceOpenPath();
+    void chooseSequenceSavePath();
 
     const CommandCatalog& catalog_;
     const ProtoSchema& schema_;
@@ -99,12 +122,15 @@ private:
     AppSettings settings_;
     History history_;
     std::unique_ptr<RequestController> controller_;
+    std::unique_ptr<SequenceRunner> runner_;
     ConfirmHandler confirm_;
+    SequenceConfirmHandler confirmSequence_;
 
     CommandBrowser* browser_ = nullptr;
     RequestEditor* editor_ = nullptr;
     ResponseView* responseView_ = nullptr;
     HistoryPanel* historyPanel_ = nullptr;
+    SequencePanel* sequencePanel_ = nullptr;
     QSplitter* splitter_ = nullptr;
     QLineEdit* addressEdit_ = nullptr;
     QCheckBox* launchCheck_ = nullptr;

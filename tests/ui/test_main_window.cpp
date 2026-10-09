@@ -9,6 +9,7 @@
 
 #include <QAction>
 #include <QComboBox>
+#include <QDockWidget>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
@@ -298,6 +299,12 @@ TEST_CASE("Render the main window with the real catalog", "[.screenshot]") {
     REQUIRE(window.selectCommand(shown->id));
     window.findChild<QPushButton*>("loadExample")->click();
     window.findChild<QPushButton*>("sendButton")->click();
+    if (qEnvironmentVariableIsSet("PTSLGUI_SCREENSHOT_SEQUENCE")) {
+        window.findChild<QPushButton*>("sequenceAdd")->click();
+        window.findChild<QPushButton*>("sequenceAdd")->click();
+        window.findChild<QDockWidget*>("sequenceDock")->raise();
+        window.runSequence();
+    }
     QTest::qWait(300);
     REQUIRE(window.grab().save(QString::fromLocal8Bit(path)));
 }
